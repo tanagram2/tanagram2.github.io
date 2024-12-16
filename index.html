@@ -46,9 +46,11 @@
     }
 
     .STARTPAGE h1 {
-      color: red;
       font-size: 3rem;
+      font-weight: bold;
+      font-style: italic;
       margin-bottom: 20px;
+      color: red; /* Initial color */
     }
 
     .button {
@@ -105,7 +107,7 @@
       position: absolute;
       width: 100%;
       height: 100%;
-      flex-direction: column;  /* Added to make elements stack vertically */
+      flex-direction: column;
     }
 
     .dvdBox {
@@ -117,8 +119,7 @@
       display: flex;
       justify-content: center;
       align-items: center;
-      border: 2px solid grey;
-      /* Maintain 4:3 aspect ratio */
+      border: 2px solid #ccc;
       aspect-ratio: 4 / 3;
       max-height: 300px;
     }
@@ -129,6 +130,12 @@
       position: absolute;
       font-weight: bold;
       font-style: italic;
+      top: 0;
+      left: 0;
+      margin: 0;
+      line-height: 1;
+      padding: 0;
+      transform: translateY(0);
     }
 
     .backButton {
@@ -150,7 +157,7 @@
   <div id="mainDOTexe">
     <!-- Start Page -->
     <div class="screen STARTPAGE">
-      <h1>TESTMAINPAGE</h1>
+      <h1 id="startText">DVD Logo Simulator</h1>
       <button class="button" onclick="showDVDLogo()">Start</button>
       <button class="button" onclick="showCredits()">Credits</button>
     </div>
@@ -175,8 +182,38 @@
     const startScreen = document.querySelector('.STARTPAGE');
     const creditsScreen = document.querySelector('.CREDITS');
     const dvdScreen = document.querySelector('.DVDLOGO');
+    const startText = document.getElementById('startText'); // Get the start page text
     let animationFrameId; // To store the requestAnimationFrame ID
     let lastColor = ''; // Track last used color to avoid repetition
+    let colorInterval; // To store the interval for color change
+    let isColorChanging = false; // Flag to check if color is changing
+
+    // Array of colors for the text (DVD logo and main text)
+    const colors = ['#FF5733', '#33FF57', '#3357FF', '#FF33F6', '#F6FF33', '#FF8C00', '#8CFF00', '#FF33A1', '#00BFFF', '#FFD700'];
+
+    // Function to change the color of the start page text at an interval
+    function startColorChange() {
+      let currentIndex = 0;
+      if (!isColorChanging) {
+        isColorChanging = true;
+        colorInterval = setInterval(() => {
+          let newColor;
+          do {
+            newColor = colors[Math.floor(Math.random() * colors.length)];
+          } while (newColor === lastColor); // Ensure no repetition
+          startText.style.color = newColor;
+          lastColor = newColor;
+        }, 3000); // Change color every 3 seconds
+      }
+    }
+
+    // Function to stop color change
+    function stopColorChange() {
+      if (isColorChanging) {
+        clearInterval(colorInterval);
+        isColorChanging = false;
+      }
+    }
 
     // Show credits screen
     function showCredits() {
@@ -196,6 +233,7 @@
       hideAllScreens(); // Hide all screens first
       startScreen.style.display = 'flex'; // Show start screen
       cancelAnimation(); // Stop the animation when leaving DVD logo screen
+      startColorChange(); // Restart the color change when going back to the start page
     }
 
     // Function to hide all screens
@@ -207,67 +245,51 @@
 
     // Initially show only the start screen
     startScreen.style.display = 'flex';
+    startColorChange(); // Start the color change for the start text
 
     // DVD Bounce Animation
     function startDVDAnimation() {
       const dvdText = document.getElementById('dvdText');
       let x = Math.random() * 50 + 10; // Random starting x position
       let y = Math.random() * 50 + 10; // Random starting y position
-      let xVelocity = 1.5;  // Slower Horizontal speed (reduced from 3)
-      let yVelocity = 1.5;  // Slower Vertical speed (reduced from 3)
+      let xVelocity = 1.5;  // Slower Horizontal speed
+      let yVelocity = 1.5;  // Slower Vertical speed
 
       const colors = ['#FF5733', '#33FF57', '#3357FF', '#FF33F6', '#F6FF33', '#FF8C00', '#8CFF00', '#FF33A1', '#00BFFF', '#FFD700'];
 
-      let isBouncing = false; // Flag to prevent multiple color changes during a single bounce
+      function bounce() {
+        const box = document.querySelector('.dvdBox');
+        const boxWidth = box.offsetWidth;
+        const boxHeight = box.offsetHeight;
 
-function bounce() {
-  const box = document.querySelector('.dvdBox');
-  const boxWidth = box.offsetWidth;
-  const boxHeight = box.offsetHeight;
+        // Get current position of the DVD text
+        let rect = dvdText.getBoundingClientRect();
+        let dvdWidth = rect.width;
+        let dvdHeight = rect.height;
 
-  // Get current position of the DVD text
-  let rect = dvdText.getBoundingClientRect();
-  let dvdWidth = rect.width;
-  let dvdHeight = rect.height;
+        // Update the position of the DVD logo
+        x += xVelocity;
+        y += yVelocity;
 
-  // Update the position of the DVD logo
-  x += xVelocity;
-  y += yVelocity;
+        // Adjust the font size of the DVD text relative to the box width
+        const fontSize = Math.min(boxWidth * 0.15, 100); // Resize text based on box width (max 100px)
+        dvdText.style.fontSize = fontSize + 'px';
 
-  // Adjust the font size of the DVD text relative to the box width
-  const fontSize = Math.min(boxWidth * 0.15, 100); // Resize text based on box width (max 100px)
-  dvdText.style.fontSize = fontSize + 'px';
+        // Check for collisions with the box edges and reverse direction
+        if (x <= 0 || x + dvdWidth >= boxWidth) {
+          xVelocity = -xVelocity;  // Reverse x velocity
+          changeColor(); // Change color on bounce
+        }
+        if (y <= 0 || y + dvdHeight >= boxHeight) {
+          yVelocity = -yVelocity;  // Reverse y velocity
+          changeColor(); // Change color on bounce
+        }
 
-  // Check for collisions with the box edges and reverse direction
-  if (x <= 0 || x + dvdWidth >= boxWidth) {
-    if (!isBouncing) {
-      xVelocity = -xVelocity;  // Reverse x velocity
-      changeColor(); // Ensure color change is triggered only once per bounce
-      isBouncing = true;  // Set flag to prevent multiple changes in the same cycle
-    }
-  }
-  if (y <= 0 || y + dvdHeight >= boxHeight) {
-    if (!isBouncing) {
-      yVelocity = -yVelocity;  // Reverse y velocity
-      changeColor(); // Ensure color change is triggered only once per bounce
-      isBouncing = true;  // Set flag to prevent multiple changes in the same cycle
-    }
-  }
+        dvdText.style.left = x + 'px';
+        dvdText.style.top = y + 'px';
 
-  // Reset isBouncing flag after one frame
-  if (isBouncing) {
-    setTimeout(() => {
-      isBouncing = false;
-    }, 10); // Reset after a short delay to avoid multiple changes in quick succession
-  }
-
-  dvdText.style.left = x + 'px';
-  dvdText.style.top = y + 'px';
-
-  animationFrameId = requestAnimationFrame(bounce); // Store the ID of the animation frame
-}
-
-
+        animationFrameId = requestAnimationFrame(bounce); // Store the ID of the animation frame
+      }
 
       function changeColor() {
         // Randomly select a color from the array without repeating the last color
