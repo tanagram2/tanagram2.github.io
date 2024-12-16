@@ -3,286 +3,290 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Tic-Tac-Toe</title>
+  <title>My Minimalist Website</title>
   <style>
     body {
-      font-family: Arial, sans-serif;
-      background-color: #f0f0f0;
       margin: 0;
       padding: 0;
+      font-family: Arial, sans-serif;
+      background-color: white;
       display: flex;
       justify-content: center;
       align-items: center;
       height: 100vh;
-      flex-direction: column;
     }
- 
+
+    #mainDOTexe {
+      width: 100%;
+      height: 100%;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      position: relative;
+    }
+
     .screen {
       display: none;
+      width: 100%;
+      height: 100%;
       text-align: center;
     }
 
-    .screen.active {
-      display: block;
+    /* Start Page */
+    .STARTPAGE {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      flex-direction: column;
+      width: 100%;
+      height: 100%;
+      position: absolute;
+      top: 0;
+      left: 0;
     }
 
-    h1 {
-      font-size: 48px;
+    .STARTPAGE h1 {
+      color: red;
+      font-size: 3rem;
       margin-bottom: 20px;
     }
 
     .button {
+      background-color: #444;
+      color: #fff;
+      border: 1px solid #ccc;
       padding: 10px 20px;
       margin: 10px;
-      font-size: 18px;
       cursor: pointer;
-      border: none;
-      border-radius: 5px;
-      background-color: #4CAF50;
-      color: white;
-      transition: background-color 0.3s;
+      font-size: 1rem;
+      transition: all 0.3s;
     }
 
     .button:hover {
-      background-color: #45a049;
+      background-color: #666;
     }
 
-    .board {
-      display: grid;
-      grid-template-columns: repeat(3, 100px);
-      grid-template-rows: repeat(3, 100px);
-      gap: 5px;
-      margin: 20px auto;
-    }
-
-    .cell {
-      width: 100px;
-      height: 100px;
-      background-color: #fff;
-      border: 2px solid #333;
-      display: flex;
-      align-items: center;
+    /* Credits Page */
+    .CREDITS {
+      display: none;
       justify-content: center;
-      font-size: 36px;
-      font-weight: bold;
+      align-items: center;
+      flex-direction: column;
+      position: absolute;
+      width: 100%;
+      height: 100%;
+    }
+
+    .CREDITS p {
+      font-size: 1.5rem;
+      margin-bottom: 20px;
+      color: black;
+    }
+
+    .CREDITS button {
+      background-color: #333;
+      color: white;
+      border: none;
+      padding: 10px 15px;
+      font-size: 1rem;
       cursor: pointer;
-    }
-
-    .cell.taken {
-      pointer-events: none;
-    }
-
-    .status {
       margin-top: 20px;
-      font-size: 24px;
     }
 
-    .status.winner {
-      color: green;
+    .CREDITS button:hover {
+      background-color: #555;
     }
 
-    .status.tie {
-      color: grey;
+    /* DVDLOGO Page */
+    .DVDLOGO {
+      display: none;
+      justify-content: center;
+      align-items: center;
+      position: absolute;
+      width: 100%;
+      height: 100%;
+      flex-direction: column;  /* Added to make elements stack vertically */
     }
 
-    .status.loser {
-      color: red;
-    }
-
-    .scoreboard {
+    .dvdBox {
+      width: 40%;
+      max-width: 400px;
+      background-color: black;
+      position: relative;
+      overflow: hidden;
       display: flex;
-      justify-content: space-around;
-      margin-top: 20px;
-      font-size: 20px;
+      justify-content: center;
+      align-items: center;
+      border: 2px solid grey;
+      /* Maintain 4:3 aspect ratio */
+      aspect-ratio: 4 / 3;
+      max-height: 300px;
     }
 
-    .scoreboard div {
-      margin: 0 10px;
-    }
-
-    .scoreboard span {
+    .dvdText {
+      font-size: 4rem;
+      color: #fff;
+      position: absolute;
       font-weight: bold;
+      font-style: italic;
     }
 
+    .backButton {
+      background-color: #333;
+      color: white;
+      border: none;
+      padding: 10px 15px;
+      font-size: 1rem;
+      cursor: pointer;
+      margin-top: 20px;
+    }
+
+    .backButton:hover {
+      background-color: #555;
+    }
   </style>
 </head>
 <body>
-
-  <!-- Main Screen -->
-  <div id="mainScreen" class="screen active">
-    <h1>Tic-Tac-Toe</h1>
-    <button class="button" onclick="startGame()">Start</button>
-    <button class="button" onclick="showCredits()">Credits</button>
-  </div>
-
-  <!-- Credits Screen -->
-  <div id="creditsScreen" class="screen">
-    <h1>Credits</h1>
-    <p>Game created by [Your Name] and ChatGPT</p>
-    <button class="button" onclick="returnToTitle()">Back</button>
-  </div>
-
-  <!-- Game Screen -->
-  <div id="gameScreen" class="screen">
-    <div class="board" id="board"></div>
-    <div class="status" id="gameStatus"></div>
-    <div class="scoreboard">
-      <div>Wins: <span id="wins">0</span></div>
-      <div>Losses: <span id="losses">0</span></div>
-      <div>Ties: <span id="ties">0</span></div>
+  <div id="mainDOTexe">
+    <!-- Start Page -->
+    <div class="screen STARTPAGE">
+      <h1>TESTMAINPAGE</h1>
+      <button class="button" onclick="showDVDLogo()">Start</button>
+      <button class="button" onclick="showCredits()">Credits</button>
     </div>
-    <button class="button" onclick="returnToTitle()">Return to Title</button>
-    <button class="button" onclick="rematch()">Rematch</button>
+
+    <!-- Credits Page -->
+    <div class="screen CREDITS">
+      <p>Created by [Your Name] and ChatGPT</p>
+      <button class="backButton" onclick="backToStart()">Back</button>
+    </div>
+
+    <!-- DVDLOGO Page -->
+    <div class="screen DVDLOGO">
+      <div class="dvdBox">
+        <div class="dvdText" id="dvdText"><strong><em>DVD</em></strong></div>
+      </div>
+      <button class="backButton" onclick="backToStart()">Back</button>
+    </div>
   </div>
 
   <script>
-    let board = [];
-    let player = 'X';
-    let computer = 'O';
-    let wins = 0;
-    let losses = 0;
-    let ties = 0;
-    let gameOver = false;
-
-    // Start the game and transition to the game screen
-    function startGame() {
-      document.getElementById('mainScreen').classList.remove('active');
-      document.getElementById('gameScreen').classList.add('active');
-      resetBoard();
-      gameOver = false;
-    }
+    // Initialize screens
+    const startScreen = document.querySelector('.STARTPAGE');
+    const creditsScreen = document.querySelector('.CREDITS');
+    const dvdScreen = document.querySelector('.DVDLOGO');
+    let animationFrameId; // To store the requestAnimationFrame ID
+    let lastColor = ''; // Track last used color to avoid repetition
 
     // Show credits screen
     function showCredits() {
-      document.getElementById('mainScreen').classList.remove('active');
-      document.getElementById('creditsScreen').classList.add('active');
+      hideAllScreens(); // Hide all screens first
+      creditsScreen.style.display = 'flex'; // Show credits
     }
 
-    // Go back to the main title screen
-    function returnToTitle() {
-      document.getElementById('gameScreen').classList.remove('active');
-      document.getElementById('creditsScreen').classList.remove('active');
-      document.getElementById('mainScreen').classList.add('active');
+    // Show DVD logo screen
+    function showDVDLogo() {
+      hideAllScreens(); // Hide all screens first
+      dvdScreen.style.display = 'flex'; // Show DVD logo
+      startDVDAnimation();
     }
 
-    // Start a new game (rematch)
-    function rematch() {
-      resetBoard();
-      gameOver = false;
-      document.getElementById('gameStatus').textContent = '';
-      document.getElementById('gameStatus').classList.remove('winner', 'tie', 'loser');
+    // Show start screen
+    function backToStart() {
+      hideAllScreens(); // Hide all screens first
+      startScreen.style.display = 'flex'; // Show start screen
+      cancelAnimation(); // Stop the animation when leaving DVD logo screen
     }
 
-    // Reset the board
-    function resetBoard() {
-      board = [
-        ['', '', ''],
-        ['', '', ''],
-        ['', '', '']
-      ];
+    // Function to hide all screens
+    function hideAllScreens() {
+      startScreen.style.display = 'none';
+      creditsScreen.style.display = 'none';
+      dvdScreen.style.display = 'none';
+    }
 
-      const boardContainer = document.getElementById('board');
-      boardContainer.innerHTML = '';
-      for (let row = 0; row < 3; row++) {
-        for (let col = 0; col < 3; col++) {
-          const cell = document.createElement('div');
-          cell.classList.add('cell');
-          cell.dataset.row = row;
-          cell.dataset.col = col;
-          cell.onclick = () => handlePlayerMove(row, col);
-          boardContainer.appendChild(cell);
-        }
+    // Initially show only the start screen
+    startScreen.style.display = 'flex';
+
+    // DVD Bounce Animation
+    function startDVDAnimation() {
+      const dvdText = document.getElementById('dvdText');
+      let x = Math.random() * 50 + 10; // Random starting x position
+      let y = Math.random() * 50 + 10; // Random starting y position
+      let xVelocity = 1.5;  // Slower Horizontal speed (reduced from 3)
+      let yVelocity = 1.5;  // Slower Vertical speed (reduced from 3)
+
+      const colors = ['#FF5733', '#33FF57', '#3357FF', '#FF33F6', '#F6FF33', '#FF8C00', '#8CFF00', '#FF33A1', '#00BFFF', '#FFD700'];
+
+      let isBouncing = false; // Flag to prevent multiple color changes during a single bounce
+
+function bounce() {
+  const box = document.querySelector('.dvdBox');
+  const boxWidth = box.offsetWidth;
+  const boxHeight = box.offsetHeight;
+
+  // Get current position of the DVD text
+  let rect = dvdText.getBoundingClientRect();
+  let dvdWidth = rect.width;
+  let dvdHeight = rect.height;
+
+  // Update the position of the DVD logo
+  x += xVelocity;
+  y += yVelocity;
+
+  // Adjust the font size of the DVD text relative to the box width
+  const fontSize = Math.min(boxWidth * 0.15, 100); // Resize text based on box width (max 100px)
+  dvdText.style.fontSize = fontSize + 'px';
+
+  // Check for collisions with the box edges and reverse direction
+  if (x <= 0 || x + dvdWidth >= boxWidth) {
+    if (!isBouncing) {
+      xVelocity = -xVelocity;  // Reverse x velocity
+      changeColor(); // Ensure color change is triggered only once per bounce
+      isBouncing = true;  // Set flag to prevent multiple changes in the same cycle
+    }
+  }
+  if (y <= 0 || y + dvdHeight >= boxHeight) {
+    if (!isBouncing) {
+      yVelocity = -yVelocity;  // Reverse y velocity
+      changeColor(); // Ensure color change is triggered only once per bounce
+      isBouncing = true;  // Set flag to prevent multiple changes in the same cycle
+    }
+  }
+
+  // Reset isBouncing flag after one frame
+  if (isBouncing) {
+    setTimeout(() => {
+      isBouncing = false;
+    }, 10); // Reset after a short delay to avoid multiple changes in quick succession
+  }
+
+  dvdText.style.left = x + 'px';
+  dvdText.style.top = y + 'px';
+
+  animationFrameId = requestAnimationFrame(bounce); // Store the ID of the animation frame
+}
+
+
+
+      function changeColor() {
+        // Randomly select a color from the array without repeating the last color
+        let randomColor;
+        do {
+          randomColor = colors[Math.floor(Math.random() * colors.length)];
+        } while (randomColor === lastColor); // Ensure color doesn't repeat
+
+        dvdText.style.color = randomColor;
+        lastColor = randomColor; // Update the last used color
       }
+
+      bounce();
     }
 
-    // Handle player's move
-    function handlePlayerMove(row, col) {
-      if (gameOver || board[row][col]) return;
-
-      board[row][col] = player;
-      const cell = document.querySelector(`.cell[data-row="${row}"][data-col="${col}"]`);
-      cell.textContent = player;
-      cell.classList.add('taken');
-      if (checkWinner(player)) {
-        gameOver = true;
-        document.getElementById('gameStatus').textContent = 'Winner!';
-        document.getElementById('gameStatus').classList.add('winner');
-        wins++;
-        updateScore();
-      } else if (isTie()) {
-        gameOver = true;
-        document.getElementById('gameStatus').textContent = 'Tie.';
-        document.getElementById('gameStatus').classList.add('tie');
-        ties++;
-        updateScore();
-      } else {
-        computerMove();
-      }
-    }
-
-    // Handle computer's move
-    function computerMove() {
-      if (gameOver) return;
-
-      let availableMoves = [];
-      for (let row = 0; row < 3; row++) {
-        for (let col = 0; col < 3; col++) {
-          if (!board[row][col]) availableMoves.push({ row, col });
-        }
-      }
-
-      if (availableMoves.length > 0) {
-        const randomMove = availableMoves[Math.floor(Math.random() * availableMoves.length)];
-        board[randomMove.row][randomMove.col] = computer;
-        const cell = document.querySelector(`.cell[data-row="${randomMove.row}"][data-col="${randomMove.col}"]`);
-        cell.textContent = computer;
-        cell.classList.add('taken');
-
-        if (checkWinner(computer)) {
-          gameOver = true;
-          document.getElementById('gameStatus').textContent = 'Loser!';
-          document.getElementById('gameStatus').classList.add('loser');
-          losses++;
-          updateScore();
-        } else if (isTie()) {
-          gameOver = true;
-          document.getElementById('gameStatus').textContent = 'Tie.';
-          document.getElementById('gameStatus').classList.add('tie');
-          ties++;
-          updateScore();
-        }
-      }
-    }
-
-    // Check if a player has won
-    function checkWinner(player) {
-      // Check rows, columns, and diagonals
-      for (let i = 0; i < 3; i++) {
-        if (board[i][0] === player && board[i][1] === player && board[i][2] === player) return true;
-        if (board[0][i] === player && board[1][i] === player && board[2][i] === player) return true;
-      }
-      if (board[0][0] === player && board[1][1] === player && board[2][2] === player) return true;
-      if (board[0][2] === player && board[1][1] === player && board[2][0] === player) return true;
-      return false;
-    }
-
-    // Check if the game is a tie
-    function isTie() {
-      for (let row = 0; row < 3; row++) {
-        for (let col = 0; col < 3; col++) {
-          if (!board[row][col]) return false;
-        }
-      }
-      return true;
-    }
-
-    // Update the scoreboard
-    function updateScore() {
-      document.getElementById('wins').textContent = wins;
-      document.getElementById('losses').textContent = losses;
-      document.getElementById('ties').textContent = ties;
+    // Function to cancel the animation
+    function cancelAnimation() {
+      cancelAnimationFrame(animationFrameId);
     }
   </script>
-
 </body>
 </html>
