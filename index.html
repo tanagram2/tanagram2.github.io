@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>My Minimalist Website</title>
+  <title>DVD Logo Simulator</title>
   <style>
     body {
       margin: 0;
@@ -46,11 +46,9 @@
     }
 
     .STARTPAGE h1 {
+      color: red;
       font-size: 3rem;
-      font-weight: bold;
-      font-style: italic;
       margin-bottom: 20px;
-      color: red; /* Initial color */
     }
 
     .button {
@@ -111,17 +109,17 @@
     }
 
     .dvdBox {
-      width: 40%;
+      width: 50%;
       max-width: 600px;
+      max-height: 450px;
       background-color: black;
       position: relative;
       overflow: hidden;
       display: flex;
       justify-content: center;
       align-items: center;
-      border: 2px solid #ccc;
+      border: 2px solid #bbb; /* Grey border, adjusted thickness */
       aspect-ratio: 4 / 3;
-      max-height: 450px;
     }
 
     .dvdText {
@@ -130,12 +128,6 @@
       position: absolute;
       font-weight: bold;
       font-style: italic;
-      top: 0;
-      left: 0;
-      margin: 0;
-      line-height: 1;
-      padding: 0;
-      transform: translateY(0);
     }
 
     .backButton {
@@ -151,13 +143,21 @@
     .backButton:hover {
       background-color: #555;
     }
+
+    /* Start Page Text */
+    .startText {
+      font-size: 2rem;
+      color: #000;
+      font-weight: bold;
+      font-style: italic;
+    }
   </style>
 </head>
 <body>
   <div id="mainDOTexe">
     <!-- Start Page -->
     <div class="screen STARTPAGE">
-      <h1 id="startText">DVD Logo Simulator</h1>
+      <h1 class="startText" id="startText">DVD Logo Simulator</h1>
       <button class="button" onclick="showDVDLogo()">Start</button>
       <button class="button" onclick="showCredits()">Credits</button>
     </div>
@@ -182,58 +182,30 @@
     const startScreen = document.querySelector('.STARTPAGE');
     const creditsScreen = document.querySelector('.CREDITS');
     const dvdScreen = document.querySelector('.DVDLOGO');
-    const startText = document.getElementById('startText'); // Get the start page text
     let animationFrameId; // To store the requestAnimationFrame ID
     let lastColor = ''; // Track last used color to avoid repetition
-    let colorInterval; // To store the interval for color change
-    let isColorChanging = false; // Flag to check if color is changing
-
-    // Array of colors for the text (DVD logo and main text)
-    const colors = ['#FF5733', '#33FF57', '#3357FF', '#FF33F6', '#F6FF33', '#FF8C00', '#8CFF00', '#FF33A1', '#00BFFF', '#FFD700'];
-
-    // Function to change the color of the start page text at an interval
-    function startColorChange() {
-      let currentIndex = 0;
-      if (!isColorChanging) {
-        isColorChanging = true;
-        colorInterval = setInterval(() => {
-          let newColor;
-          do {
-            newColor = colors[Math.floor(Math.random() * colors.length)];
-          } while (newColor === lastColor); // Ensure no repetition
-          startText.style.color = newColor;
-          lastColor = newColor;
-        }, 3000); // Change color every 3 seconds
-      }
-    }
-
-    // Function to stop color change
-    function stopColorChange() {
-      if (isColorChanging) {
-        clearInterval(colorInterval);
-        isColorChanging = false;
-      }
-    }
+    let colorChangeInterval;
 
     // Show credits screen
     function showCredits() {
-      hideAllScreens(); // Hide all screens first
-      creditsScreen.style.display = 'flex'; // Show credits
+      hideAllScreens();
+      creditsScreen.style.display = 'flex';
     }
 
     // Show DVD logo screen
     function showDVDLogo() {
-      hideAllScreens(); // Hide all screens first
-      dvdScreen.style.display = 'flex'; // Show DVD logo
+      hideAllScreens();
+      dvdScreen.style.display = 'flex';
       startDVDAnimation();
+      startTextColorChange();
     }
 
     // Show start screen
     function backToStart() {
-      hideAllScreens(); // Hide all screens first
-      startScreen.style.display = 'flex'; // Show start screen
-      cancelAnimation(); // Stop the animation when leaving DVD logo screen
-      startColorChange(); // Restart the color change when going back to the start page
+      hideAllScreens();
+      startScreen.style.display = 'flex';
+      cancelAnimation();
+      stopTextColorChange();
     }
 
     // Function to hide all screens
@@ -245,15 +217,14 @@
 
     // Initially show only the start screen
     startScreen.style.display = 'flex';
-    startColorChange(); // Start the color change for the start text
 
     // DVD Bounce Animation
     function startDVDAnimation() {
       const dvdText = document.getElementById('dvdText');
       let x = Math.random() * 50 + 10; // Random starting x position
       let y = Math.random() * 50 + 10; // Random starting y position
-      let xVelocity = 1.5;  // Slower Horizontal speed
-      let yVelocity = 1.5;  // Slower Vertical speed
+      let xVelocity = 2; // Horizontal speed
+      let yVelocity = 2; // Vertical speed
 
       const colors = ['#FF5733', '#33FF57', '#3357FF', '#FF33F6', '#F6FF33', '#FF8C00', '#8CFF00', '#FF33A1', '#00BFFF', '#FFD700'];
 
@@ -276,11 +247,13 @@
         dvdText.style.fontSize = fontSize + 'px';
 
         // Check for collisions with the box edges and reverse direction
-        if (x <= 0 || x + dvdWidth >= boxWidth) {
+        if (x <= -1 || x + dvdWidth >= boxWidth + 1) {
           xVelocity = -xVelocity;  // Reverse x velocity
           changeColor(); // Change color on bounce
         }
-        if (y <= 0 || y + dvdHeight >= boxHeight) {
+
+        // Allow the DVD text to travel 2px further up (towards the grey border) and 1px down
+        if (y <= -9 || y + dvdHeight >= boxHeight + 7) {
           yVelocity = -yVelocity;  // Reverse y velocity
           changeColor(); // Change color on bounce
         }
@@ -288,11 +261,10 @@
         dvdText.style.left = x + 'px';
         dvdText.style.top = y + 'px';
 
-        animationFrameId = requestAnimationFrame(bounce); // Store the ID of the animation frame
+        animationFrameId = requestAnimationFrame(bounce);
       }
 
       function changeColor() {
-        // Randomly select a color from the array without repeating the last color
         let randomColor;
         do {
           randomColor = colors[Math.floor(Math.random() * colors.length)];
@@ -308,6 +280,21 @@
     // Function to cancel the animation
     function cancelAnimation() {
       cancelAnimationFrame(animationFrameId);
+    }
+
+    // Start changing color for DVD Logo Simulator text every 3 seconds
+    function startTextColorChange() {
+      const startText = document.getElementById('startText');
+      colorChangeInterval = setInterval(() => {
+        const colors = ['#FF5733', '#33FF57', '#3357FF', '#FF33F6', '#F6FF33', '#FF8C00', '#8CFF00', '#FF33A1', '#00BFFF', '#FFD700'];
+        let randomColor = colors[Math.floor(Math.random() * colors.length)];
+        startText.style.color = randomColor;
+      }, 3000);
+    }
+
+    // Stop changing color when the screen is not visible
+    function stopTextColorChange() {
+      clearInterval(colorChangeInterval);
     }
   </script>
 </body>
