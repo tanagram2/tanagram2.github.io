@@ -118,7 +118,7 @@
       display: flex;
       justify-content: center;
       align-items: center;
-      border: 2px solid #bbb; /* Grey border, adjusted thickness */
+      border: 3px solid #bbb; /* Grey border, adjusted thickness */
       aspect-ratio: 4 / 3;
     }
 
@@ -197,15 +197,22 @@
       hideAllScreens();
       dvdScreen.style.display = 'flex';
       startDVDAnimation();
-      startTextColorChange();
+      stopStartTextColorChange(); // Stop color change on Start page when moving to DVD logo
+    }
+
+    // Show start screen
+    function showStart() {
+      hideAllScreens();
+      startScreen.style.display = 'flex';
+      startStartTextColorChange();  // Start color changing
     }
 
     // Show start screen
     function backToStart() {
       hideAllScreens();
-      startScreen.style.display = 'flex';
-      cancelAnimation();
-      stopTextColorChange();
+      showStart(); // Use showStart to ensure color change starts
+      cancelAnimation(); // Cancel the DVD logo animation
+      stopStartTextColorChange(); // Stop the color change on the Start page
     }
 
     // Function to hide all screens
@@ -216,7 +223,7 @@
     }
 
     // Initially show only the start screen
-    startScreen.style.display = 'flex';
+    showStart();
 
     // DVD Bounce Animation
     function startDVDAnimation() {
@@ -282,8 +289,8 @@
       cancelAnimationFrame(animationFrameId);
     }
 
-    // Start changing color for DVD Logo Simulator text every 3 seconds
-    function startTextColorChange() {
+    // Start changing color for 'DVD Logo Simulator' text every 3 seconds (only for Start page)
+    function startStartTextColorChange() {
       const startText = document.getElementById('startText');
       colorChangeInterval = setInterval(() => {
         const colors = ['#FF5733', '#33FF57', '#3357FF', '#FF33F6', '#F6FF33', '#FF8C00', '#8CFF00', '#FF33A1', '#00BFFF', '#FFD700'];
@@ -293,7 +300,7 @@
     }
 
     // Stop changing color when the screen is not visible
-    function stopTextColorChange() {
+    function stopStartTextColorChange() {
       clearInterval(colorChangeInterval);
     }
   </script>
