@@ -247,13 +247,13 @@
         dvdText.style.fontSize = fontSize + 'px';
 
         // Check for collisions with the box edges and reverse direction
-        if (x <= -1 || x + dvdWidth >= boxWidth + 1) {
+        if (x <= -1 || x + dvdWidth >= boxWidth) {
           xVelocity = -xVelocity;  // Reverse x velocity
           changeColor(); // Change color on bounce
         }
 
         // Allow the DVD text to travel 2px further up (towards the grey border) and 1px down
-        if (y <= -9 || y + dvdHeight >= boxHeight + 7) {
+        if (y <= -7 || y + dvdHeight >= boxHeight + 5) {
           yVelocity = -yVelocity;  // Reverse y velocity
           changeColor(); // Change color on bounce
         }
