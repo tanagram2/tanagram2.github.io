@@ -1,11 +1,15 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Hyper Quick Website Demo</title>
+    <title>Color Pages Demo</title>
     <style>
-        body, html {
+        * {
             margin: 0;
             padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body, html {
             height: 100%;
             overflow: hidden;
         }
@@ -16,6 +20,7 @@
             height: 100%;
         }
         
+        /* Pages fade in/out smoothly */
         .page {
             position: absolute;
             width: 100%;
@@ -23,93 +28,83 @@
             display: flex;
             justify-content: center;
             align-items: center;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+            pointer-events: none;
         }
         
-        #black-page {
-            background-color: black;
-            display: flex;
+        .page.active {
+            opacity: 1;
+            pointer-events: all;
         }
         
-        #white-page {
-            background-color: white;
-            display: none;
-        }
+        /* Original colors (high contrast) */
+        #black-page { background: #000; }
+        #white-page { background: #fff; }
+        #blue-page  { background: #00f; }
+        #red-page   { background: #f00; }
+        #green-page { background: #0f0; }
         
-        #blue-page {
-            background-color: blue;
-            display: none;
-            flex-direction: column;
-        }
-        
-        #red-page {
-            background-color: red;
-            display: none;
-        }
-        
-        #green-page {
-            background-color: green;
-            display: none;
-        }
-        
+        /* Buttons stay put on hover */
         .button {
             padding: 15px 30px;
             border: none;
             border-radius: 5px;
             cursor: pointer;
             font-size: 16px;
-            transition: background-color 0.3s;
+            transition: background-color 0.2s ease;
         }
         
+        /* No transform effects, just color change */
         #black-page-button {
-            background-color: green;
+            background: #0f0; /* Green */
         }
-        
         #black-page-button:hover {
-            background-color: #4CAF50; /* lighter green */
+            background: #0c0; /* Slightly darker green */
         }
         
         #white-page-button {
-            background-color: black;
-            color: white;
+            background: #000;
+            color: #fff;
         }
-        
         #white-page-button:hover {
-            background-color: #333; /* dark gray */
+            background: #333;
         }
         
         #blue-page-red-button {
-            background-color: red;
-            color: white;
+            background: #f00;
+            color: #fff;
             margin-bottom: 20px;
         }
-        
         #blue-page-red-button:hover {
-            background-color: #ff6666; /* lighter red */
+            background: #d00;
         }
         
         #blue-page-green-button {
-            background-color: green;
-            color: white;
+            background: #0f0;
+            color: #000;
         }
-        
         #blue-page-green-button:hover {
-            background-color: #4CAF50; /* lighter green */
+            background: #0c0;
         }
         
         #red-page-button, #green-page-button {
-            background-color: blue;
-            color: white;
+            background: #00f;
+            color: #fff;
+        }
+        #red-page-button:hover, #green-page-button:hover {
+            background: #008;
         }
         
-        #red-page-button:hover, #green-page-button:hover {
-            background-color: #6666ff; /* lighter blue */
+        #blue-page {
+            flex-direction: column;
         }
     </style>
 </head>
 <body>
     <div id="main-container">
         <!-- Black Page -->
-        <div id="black-page" class="page">
+        <div id="black-page" class="page active">
             <button id="black-page-button" class="button" onclick="showPage('white-page')"></button>
         </div>
         
@@ -137,14 +132,10 @@
 
     <script>
         function showPage(pageId) {
-            // Hide all pages
-            const pages = document.querySelectorAll('.page');
-            pages.forEach(page => {
-                page.style.display = 'none';
+            document.querySelectorAll('.page').forEach(page => {
+                page.classList.remove('active');
             });
-            
-            // Show the requested page
-            document.getElementById(pageId).style.display = 'flex';
+            document.getElementById(pageId).classList.add('active');
         }
     </script>
 </body>
