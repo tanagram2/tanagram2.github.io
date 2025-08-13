@@ -1,308 +1,151 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>DVD Logo Simulator</title>
-  <style>
-    body {
-      margin: 0;
-      padding: 0;
-      font-family: Arial, sans-serif;
-      background-color: white;
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      height: 100vh;
-    }
-
-    #mainDOTexe {
-      width: 100%;
-      height: 100%;
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      position: relative;
-    }
-
-    .screen {
-      display: none;
-      width: 100%;
-      height: 100%;
-      text-align: center;
-    }
-
-    /* Start Page */
-    .STARTPAGE {
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      flex-direction: column;
-      width: 100%;
-      height: 100%;
-      position: absolute;
-      top: 0;
-      left: 0;
-    }
-
-    .STARTPAGE h1 {
-      color: red;
-      font-size: 3rem;
-      margin-bottom: 20px;
-    }
-
-    .button {
-      background-color: #444;
-      color: #fff;
-      border: 1px solid #ccc;
-      padding: 10px 20px;
-      margin: 10px;
-      cursor: pointer;
-      font-size: 1rem;
-      transition: all 0.3s;
-    }
-
-    .button:hover {
-      background-color: #666;
-    }
-
-    /* Credits Page */
-    .CREDITS {
-      display: none;
-      justify-content: center;
-      align-items: center;
-      flex-direction: column;
-      position: absolute;
-      width: 100%;
-      height: 100%;
-    }
-
-    .CREDITS p {
-      font-size: 1.5rem;
-      margin-bottom: 20px;
-      color: black;
-    }
-
-    .CREDITS button {
-      background-color: #333;
-      color: white;
-      border: none;
-      padding: 10px 15px;
-      font-size: 1rem;
-      cursor: pointer;
-      margin-top: 20px;
-    }
-
-    .CREDITS button:hover {
-      background-color: #555;
-    }
-
-    /* DVDLOGO Page */
-    .DVDLOGO {
-      display: none;
-      justify-content: center;
-      align-items: center;
-      position: absolute;
-      width: 100%;
-      height: 100%;
-      flex-direction: column;
-    }
-
-    .dvdBox {
-      width: 50%;
-      max-width: 600px;
-      max-height: 450px;
-      background-color: black;
-      position: relative;
-      overflow: hidden;
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      border: 3px solid #bbb; /* Grey border, adjusted thickness */
-      aspect-ratio: 4 / 3;
-    }
-
-    .dvdText {
-      font-size: 4rem;
-      color: #fff;
-      position: absolute;
-      font-weight: bold;
-      font-style: italic;
-    }
-
-    .backButton {
-      background-color: #333;
-      color: white;
-      border: none;
-      padding: 10px 15px;
-      font-size: 1rem;
-      cursor: pointer;
-      margin-top: 20px;
-    }
-
-    .backButton:hover {
-      background-color: #555;
-    }
-
-    /* Start Page Text */
-    .startText {
-      font-size: 2rem;
-      color: #000;
-      font-weight: bold;
-      font-style: italic;
-    }
-  </style>
+    <title>Hyper Quick Website Demo</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            overflow: hidden;
+        }
+        
+        #main-container {
+            position: relative;
+            width: 100%;
+            height: 100%;
+        }
+        
+        .page {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        
+        #black-page {
+            background-color: black;
+            display: flex;
+        }
+        
+        #white-page {
+            background-color: white;
+            display: none;
+        }
+        
+        #blue-page {
+            background-color: blue;
+            display: none;
+            flex-direction: column;
+        }
+        
+        #red-page {
+            background-color: red;
+            display: none;
+        }
+        
+        #green-page {
+            background-color: green;
+            display: none;
+        }
+        
+        .button {
+            padding: 15px 30px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            transition: background-color 0.3s;
+        }
+        
+        #black-page-button {
+            background-color: green;
+        }
+        
+        #black-page-button:hover {
+            background-color: #4CAF50; /* lighter green */
+        }
+        
+        #white-page-button {
+            background-color: black;
+            color: white;
+        }
+        
+        #white-page-button:hover {
+            background-color: #333; /* dark gray */
+        }
+        
+        #blue-page-red-button {
+            background-color: red;
+            color: white;
+            margin-bottom: 20px;
+        }
+        
+        #blue-page-red-button:hover {
+            background-color: #ff6666; /* lighter red */
+        }
+        
+        #blue-page-green-button {
+            background-color: green;
+            color: white;
+        }
+        
+        #blue-page-green-button:hover {
+            background-color: #4CAF50; /* lighter green */
+        }
+        
+        #red-page-button, #green-page-button {
+            background-color: blue;
+            color: white;
+        }
+        
+        #red-page-button:hover, #green-page-button:hover {
+            background-color: #6666ff; /* lighter blue */
+        }
+    </style>
 </head>
 <body>
-  <div id="mainDOTexe">
-    <!-- Start Page -->
-    <div class="screen STARTPAGE">
-      <h1 class="startText" id="startText">DVD Logo Simulator</h1>
-      <button class="button" onclick="showDVDLogo()">Start</button>
-      <button class="button" onclick="showCredits()">Credits</button>
+    <div id="main-container">
+        <!-- Black Page -->
+        <div id="black-page" class="page">
+            <button id="black-page-button" class="button" onclick="showPage('white-page')"></button>
+        </div>
+        
+        <!-- White Page -->
+        <div id="white-page" class="page">
+            <button id="white-page-button" class="button" onclick="showPage('blue-page')"></button>
+        </div>
+        
+        <!-- Blue Page -->
+        <div id="blue-page" class="page">
+            <button id="blue-page-red-button" class="button" onclick="showPage('red-page')"></button>
+            <button id="blue-page-green-button" class="button" onclick="showPage('green-page')"></button>
+        </div>
+        
+        <!-- Red Page -->
+        <div id="red-page" class="page">
+            <button id="red-page-button" class="button" onclick="showPage('blue-page')"></button>
+        </div>
+        
+        <!-- Green Page -->
+        <div id="green-page" class="page">
+            <button id="green-page-button" class="button" onclick="showPage('blue-page')"></button>
+        </div>
     </div>
 
-    <!-- Credits Page -->
-    <div class="screen CREDITS">
-      <p>Created by [Your Name] and ChatGPT</p>
-      <button class="backButton" onclick="backToStart()">Back</button>
-    </div>
-
-    <!-- DVDLOGO Page -->
-    <div class="screen DVDLOGO">
-      <div class="dvdBox">
-        <div class="dvdText" id="dvdText"><strong><em>DVD</em></strong></div>
-      </div>
-      <button class="backButton" onclick="backToStart()">Back</button>
-    </div>
-  </div>
-
-  <script>
-    // Initialize screens
-    const startScreen = document.querySelector('.STARTPAGE');
-    const creditsScreen = document.querySelector('.CREDITS');
-    const dvdScreen = document.querySelector('.DVDLOGO');
-    let animationFrameId; // To store the requestAnimationFrame ID
-    let lastColor = ''; // Track last used color to avoid repetition
-    let colorChangeInterval;
-
-    // Show credits screen
-    function showCredits() {
-      hideAllScreens();
-      creditsScreen.style.display = 'flex';
-    }
-
-    // Show DVD logo screen
-    function showDVDLogo() {
-      hideAllScreens();
-      dvdScreen.style.display = 'flex';
-      startDVDAnimation();
-      stopStartTextColorChange(); // Stop color change on Start page when moving to DVD logo
-    }
-
-    // Show start screen
-    function showStart() {
-      hideAllScreens();
-      startScreen.style.display = 'flex';
-      startStartTextColorChange();  // Start color changing
-    }
-
-    // Show start screen
-    function backToStart() {
-      hideAllScreens();
-      showStart(); // Use showStart to ensure color change starts
-      cancelAnimation(); // Cancel the DVD logo animation
-      stopStartTextColorChange(); // Stop the color change on the Start page
-    }
-
-    // Function to hide all screens
-    function hideAllScreens() {
-      startScreen.style.display = 'none';
-      creditsScreen.style.display = 'none';
-      dvdScreen.style.display = 'none';
-    }
-
-    // Initially show only the start screen
-    showStart();
-
-    // DVD Bounce Animation
-    function startDVDAnimation() {
-      const dvdText = document.getElementById('dvdText');
-      let x = Math.random() * 50 + 10; // Random starting x position
-      let y = Math.random() * 50 + 10; // Random starting y position
-      let xVelocity = 2; // Horizontal speed
-      let yVelocity = 2; // Vertical speed
-
-      const colors = ['#FF5733', '#33FF57', '#3357FF', '#FF33F6', '#F6FF33', '#FF8C00', '#8CFF00', '#FF33A1', '#00BFFF', '#FFD700'];
-
-      function bounce() {
-        const box = document.querySelector('.dvdBox');
-        const boxWidth = box.offsetWidth;
-        const boxHeight = box.offsetHeight;
-
-        // Get current position of the DVD text
-        let rect = dvdText.getBoundingClientRect();
-        let dvdWidth = rect.width;
-        let dvdHeight = rect.height;
-
-        // Update the position of the DVD logo
-        x += xVelocity;
-        y += yVelocity;
-
-        // Adjust the font size of the DVD text relative to the box width
-        const fontSize = Math.min(boxWidth * 0.15, 100); // Resize text based on box width (max 100px)
-        dvdText.style.fontSize = fontSize + 'px';
-
-        // Check for collisions with the box edges and reverse direction
-        if (x <= -1 || x + dvdWidth >= boxWidth) {
-          xVelocity = -xVelocity;  // Reverse x velocity
-          changeColor(); // Change color on bounce
+    <script>
+        function showPage(pageId) {
+            // Hide all pages
+            const pages = document.querySelectorAll('.page');
+            pages.forEach(page => {
+                page.style.display = 'none';
+            });
+            
+            // Show the requested page
+            document.getElementById(pageId).style.display = 'flex';
         }
-
-        // Allow the DVD text to travel 2px further up (towards the grey border) and 1px down
-        if (y <= -7 || y + dvdHeight >= boxHeight + 5) {
-          yVelocity = -yVelocity;  // Reverse y velocity
-          changeColor(); // Change color on bounce
-        }
-
-        dvdText.style.left = x + 'px';
-        dvdText.style.top = y + 'px';
-
-        animationFrameId = requestAnimationFrame(bounce);
-      }
-
-      function changeColor() {
-        let randomColor;
-        do {
-          randomColor = colors[Math.floor(Math.random() * colors.length)];
-        } while (randomColor === lastColor); // Ensure color doesn't repeat
-
-        dvdText.style.color = randomColor;
-        lastColor = randomColor; // Update the last used color
-      }
-
-      bounce();
-    }
-
-    // Function to cancel the animation
-    function cancelAnimation() {
-      cancelAnimationFrame(animationFrameId);
-    }
-
-    // Start changing color for 'DVD Logo Simulator' text every 3 seconds (only for Start page)
-    function startStartTextColorChange() {
-      const startText = document.getElementById('startText');
-      colorChangeInterval = setInterval(() => {
-        const colors = ['#FF5733', '#33FF57', '#3357FF', '#FF33F6', '#F6FF33', '#FF8C00', '#8CFF00', '#FF33A1', '#00BFFF', '#FFD700'];
-        let randomColor = colors[Math.floor(Math.random() * colors.length)];
-        startText.style.color = randomColor;
-      }, 3000);
-    }
-
-    // Stop changing color when the screen is not visible
-    function stopStartTextColorChange() {
-      clearInterval(colorChangeInterval);
-    }
-  </script>
+    </script>
 </body>
 </html>
