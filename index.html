@@ -1,0 +1,905 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MartianOS</title>
+    <style>
+        /* Global Styles */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Courier New', monospace;
+        }
+
+        body {
+            overflow: hidden;
+            height: 100vh;
+            width: 100vw;
+        }
+
+        #main-container {
+            width: 100%;
+            height: 100%;
+            position: relative;
+        }
+
+        /* Page Styles - All pages are full screen */
+        .page {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            transition: opacity 0.3s;
+        }
+
+        /* Black Page (Matrix-like) */
+        #black-page {
+            background-color: #000;
+            color: #0f0;
+            z-index: 5;
+        }
+
+        #martian-matrix {
+            font-size: 2.5rem;
+            margin-bottom: 2rem;
+            text-shadow: 0 0 10px #0f0;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% { opacity: 0.7; }
+            50% { opacity: 1; }
+            100% { opacity: 0.7; }
+        }
+
+        /* White Page */
+        #white-page {
+            background-color: #fff;
+            color: #000;
+            z-index: 4;
+            display: none;
+        }
+
+        #martian-os {
+            font-size: 3rem;
+            margin-bottom: 2rem;
+        }
+
+        /* Blue Page */
+        #blue-page {
+            background-color: #1a237e;
+            color: #fff;
+            z-index: 3;
+            display: none;
+        }
+
+        .blue-page-title {
+            font-size: 2.5rem;
+            margin-bottom: 3rem;
+        }
+
+        /* Red Page */
+        #red-page {
+            background-color: #b71c1c;
+            color: #fff;
+            z-index: 2;
+            display: none;
+        }
+
+        /* Green Page */
+        #green-page {
+            background-color: #1b5e20;
+            color: #fff;
+            z-index: 1;
+            display: none;
+        }
+
+        /* Button Styles */
+        .btn {
+            padding: 15px 40px;
+            font-size: 1.2rem;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: all 0.3s;
+            font-weight: bold;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .btn:hover {
+            transform: scale(1.05);
+            box-shadow: 0 0 15px rgba(255, 255, 255, 0.5);
+        }
+
+        .btn-green {
+            background-color: #0a0;
+            color: #fff;
+        }
+
+        .btn-green:hover {
+            background-color: #0f0;
+        }
+
+        .btn-black {
+            background-color: #000;
+            color: #fff;
+        }
+
+        .btn-black:hover {
+            background-color: #333;
+        }
+
+        .btn-red {
+            background-color: #d00;
+            color: #fff;
+        }
+
+        .btn-red:hover {
+            background-color: #f00;
+        }
+
+        .btn-blue {
+            background-color: #03a9f4;
+            color: #fff;
+        }
+
+        .btn-blue:hover {
+            background-color: #29b6f6;
+        }
+
+        /* Button Container for Blue Page */
+        .button-container {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        /* Tic Tac Toe Styles */
+        .back-button {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            padding: 10px 20px;
+            background-color: #03a9f4;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-weight: bold;
+        }
+
+        .back-button:hover {
+            background-color: #29b6f6;
+        }
+
+        #tictactoe-container {
+            background-color: white;
+            border: 3px solid black;
+            border-radius: 10px;
+            padding: 30px;
+            width: 90%;
+            max-width: 500px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            color: black;
+        }
+
+        #tictactoe-title {
+            font-size: 2rem;
+            margin-bottom: 20px;
+        }
+
+        #game-setup, #game-board, #game-result, #mode-selection {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 15px;
+            width: 100%;
+        }
+
+        #game-board, #game-result, #mode-selection {
+            display: none;
+        }
+
+        .board {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            grid-gap: 5px;
+            width: 100%;
+            max-width: 300px;
+            margin: 0 auto;
+        }
+
+        .cell {
+            aspect-ratio: 1;
+            background-color: #f5f5f5;
+            border: 2px solid #333;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-size: 2.5rem;
+            font-weight: bold;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+
+        .cell:hover {
+            background-color: #e0e0e0;
+        }
+
+        .cell.x {
+            color: #d32f2f;
+        }
+
+        .cell.o {
+            color: #1976d2;
+        }
+
+        #game-status {
+            font-size: 1.2rem;
+            margin: 10px 0;
+            height: 30px;
+        }
+
+        .mode-buttons {
+            display: flex;
+            gap: 15px;
+        }
+
+        .result-buttons {
+            display: flex;
+            gap: 15px;
+            margin-top: 15px;
+        }
+
+        /* Roulette Styles */
+        #roulette-container {
+            background-color: white;
+            border: 3px solid black;
+            border-radius: 10px;
+            padding: 30px;
+            width: 90%;
+            max-width: 800px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            color: black;
+        }
+
+        #roulette-title {
+            font-size: 2rem;
+            margin-bottom: 20px;
+        }
+
+        .roulette-content {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 20px;
+            width: 100%;
+        }
+
+        .wheel-container {
+            position: relative;
+            width: 300px;
+            height: 300px;
+        }
+
+        #roulette-wheel {
+            width: 100%;
+            height: 100%;
+            border-radius: 50%;
+            position: relative;
+            overflow: hidden;
+            border: 5px solid #8B4513;
+            background: #8B4513;
+            transition: transform 3s cubic-bezier(0.2, 0.8, 0.3, 1);
+        }
+
+        .wheel-segment {
+            position: absolute;
+            width: 50%;
+            height: 50%;
+            transform-origin: 100% 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            color: white;
+            text-shadow: 1px 1px 1px rgba(0,0,0,0.5);
+        }
+
+        .segment-red {
+            background-color: #d32f2f;
+        }
+
+        .segment-black {
+            background-color: #000;
+        }
+
+        .segment-green {
+            background-color: #0a0;
+        }
+
+        #spin-button {
+            margin-top: 20px;
+            padding: 10px 30px;
+            font-size: 1.2rem;
+        }
+
+        #result-display {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 2rem;
+            font-weight: bold;
+            background: rgba(255, 255, 255, 0.9);
+            padding: 10px 20px;
+            border-radius: 10px;
+            display: none;
+        }
+
+        .betting-table {
+            display: flex;
+            width: 100%;
+            max-width: 600px;
+            border: 2px solid #333;
+        }
+
+        .zero-column {
+            display: flex;
+            flex-direction: column;
+            width: 60px;
+        }
+
+        .zero-cell {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border: 1px solid #333;
+            font-weight: bold;
+            font-size: 1.2rem;
+            min-height: 60px;
+        }
+
+        .zero-green {
+            background-color: #0a0;
+            color: white;
+        }
+
+        .numbers-grid {
+            display: grid;
+            grid-template-columns: repeat(12, 1fr);
+            grid-template-rows: repeat(3, 60px);
+            flex: 1;
+        }
+
+        .number-cell {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border: 1px solid #333;
+            font-weight: bold;
+            font-size: 1.1rem;
+            cursor: default;
+        }
+
+        .number-red {
+            background-color: #ff6b6b;
+            color: white;
+        }
+
+        .number-black {
+            background-color: #2d3436;
+            color: white;
+        }
+
+        .highlighted {
+            box-shadow: 0 0 0 3px yellow;
+            z-index: 10;
+            position: relative;
+        }
+    </style>
+</head>
+<body>
+    <div id="main-container">
+        <!-- Black Page -->
+        <div id="black-page" class="page">
+            <h1 id="martian-matrix">MartianMatrix</h1>
+            <button id="enter-btn" class="btn btn-green">ENTER</button>
+        </div>
+
+        <!-- White Page -->
+        <div id="white-page" class="page">
+            <h1 id="martian-os">MartianOS</h1>
+            <button id="start-btn" class="btn btn-black">START</button>
+        </div>
+
+        <!-- Blue Page -->
+        <div id="blue-page" class="page">
+            <h1 class="blue-page-title">Application Menu</h1>
+            <div class="button-container">
+                <button id="red-app-btn" class="btn btn-red">Tic Tac Toe</button>
+                <button id="green-app-btn" class="btn btn-green">Roulette</button>
+            </div>
+        </div>
+
+        <!-- Red Page -->
+        <div id="red-page" class="page">
+            <button class="back-button">← Back</button>
+            <div id="tictactoe-container">
+                <h2 id="tictactoe-title">Tic Tac Toe</h2>
+                
+                <div id="game-setup">
+                    <button id="tictactoe-start" class="btn btn-black">Start Game</button>
+                </div>
+                
+                <div id="mode-selection">
+                    <div class="mode-buttons">
+                        <button id="one-player" class="btn btn-red">1 Player</button>
+                        <button id="two-player" class="btn btn-blue">2 Players</button>
+                    </div>
+                </div>
+                
+                <div id="game-board">
+                    <div class="board" id="board">
+                        <div class="cell" data-index="0"></div>
+                        <div class="cell" data-index="1"></div>
+                        <div class="cell" data-index="2"></div>
+                        <div class="cell" data-index="3"></div>
+                        <div class="cell" data-index="4"></div>
+                        <div class="cell" data-index="5"></div>
+                        <div class="cell" data-index="6"></div>
+                        <div class="cell" data-index="7"></div>
+                        <div class="cell" data-index="8"></div>
+                    </div>
+                    <div id="game-status"></div>
+                </div>
+                
+                <div id="game-result">
+                    <div id="result-message"></div>
+                    <div class="result-buttons">
+                        <button id="retry-btn" class="btn btn-green">Retry</button>
+                        <button id="go-back-btn" class="btn btn-blue">Go Back</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Green Page -->
+        <div id="green-page" class="page">
+            <button class="back-button">← Back</button>
+            <div id="roulette-container">
+                <h2 id="roulette-title">Double-Zero Roulette</h2>
+                <div class="roulette-content">
+                    <div class="wheel-container">
+                        <div id="roulette-wheel"></div>
+                        <div id="result-display"></div>
+                    </div>
+                    <button id="spin-button" class="btn btn-green">SPIN</button>
+                    
+                    <div class="betting-table">
+                        <div class="zero-column">
+                            <div class="zero-cell zero-green" data-number="0">0</div>
+                            <div class="zero-cell zero-green" data-number="00">00</div>
+                        </div>
+                        <div class="numbers-grid" id="numbers-grid">
+                            <!-- Numbers will be generated in correct roulette order -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Page navigation logic
+        document.addEventListener('DOMContentLoaded', function() {
+            // Get all page elements
+            const blackPage = document.getElementById('black-page');
+            const whitePage = document.getElementById('white-page');
+            const bluePage = document.getElementById('blue-page');
+            const redPage = document.getElementById('red-page');
+            const greenPage = document.getElementById('green-page');
+            
+            // Navigation buttons
+            const enterBtn = document.getElementById('enter-btn');
+            const startBtn = document.getElementById('start-btn');
+            const redAppBtn = document.getElementById('red-app-btn');
+            const greenAppBtn = document.getElementById('green-app-btn');
+            const backButtons = document.querySelectorAll('.back-button');
+            
+            // Navigation functions
+            function showPage(page) {
+                // Hide all pages
+                blackPage.style.display = 'none';
+                whitePage.style.display = 'none';
+                bluePage.style.display = 'none';
+                redPage.style.display = 'none';
+                greenPage.style.display = 'none';
+                
+                // Show the requested page
+                page.style.display = 'flex';
+                
+                // Reset Tic Tac Toe if we're navigating away from red page
+                if (page !== redPage) {
+                    resetTicTacToe();
+                }
+                // Reset Roulette if we're navigating away from green page
+                if (page !== greenPage) {
+                    resetRoulette();
+                }
+            }
+            
+            // Set up event listeners for navigation
+            enterBtn.addEventListener('click', () => showPage(whitePage));
+            startBtn.addEventListener('click', () => showPage(bluePage));
+            redAppBtn.addEventListener('click', () => showPage(redPage));
+            greenAppBtn.addEventListener('click', () => showPage(greenPage));
+            
+            // Back buttons return to blue page
+            backButtons.forEach(button => {
+                button.addEventListener('click', () => showPage(bluePage));
+            });
+            
+            // Tic Tac Toe Game Logic (unchanged)
+            const gameSetup = document.getElementById('game-setup');
+            const modeSelection = document.getElementById('mode-selection');
+            const gameBoard = document.getElementById('game-board');
+            const gameResult = document.getElementById('game-result');
+            const tictactoeStart = document.getElementById('tictactoe-start');
+            const onePlayerBtn = document.getElementById('one-player');
+            const twoPlayerBtn = document.getElementById('two-player');
+            const retryBtn = document.getElementById('retry-btn');
+            const goBackBtn = document.getElementById('go-back-btn');
+            const gameStatus = document.getElementById('game-status');
+            const resultMessage = document.getElementById('result-message');
+            const cells = document.querySelectorAll('.cell');
+            
+            let currentPlayer = 'X';
+            let gameMode = '';
+            let gameActive = false;
+            let boardState = ['', '', '', '', '', '', '', '', ''];
+            
+            const winningConditions = [
+                [0, 1, 2], [3, 4, 5], [6, 7, 8],
+                [0, 3, 6], [1, 4, 7], [2, 5, 8],
+                [0, 4, 8], [2, 4, 6]
+            ];
+            
+            function resetTicTacToe() {
+                gameSetup.style.display = 'flex';
+                modeSelection.style.display = 'none';
+                gameBoard.style.display = 'none';
+                gameResult.style.display = 'none';
+                
+                currentPlayer = 'X';
+                gameMode = '';
+                gameActive = false;
+                boardState = ['', '', '', '', '', '', '', '', ''];
+                
+                cells.forEach(cell => {
+                    cell.textContent = '';
+                    cell.className = 'cell';
+                });
+                
+                gameStatus.textContent = '';
+            }
+            
+            tictactoeStart.addEventListener('click', function() {
+                gameSetup.style.display = 'none';
+                modeSelection.style.display = 'flex';
+            });
+            
+            onePlayerBtn.addEventListener('click', function() {
+                startGame('1-player');
+            });
+            
+            twoPlayerBtn.addEventListener('click', function() {
+                startGame('2-player');
+            });
+            
+            function startGame(mode) {
+                gameMode = mode;
+                gameActive = true;
+                currentPlayer = 'X';
+                boardState = ['', '', '', '', '', '', '', '', ''];
+                modeSelection.style.display = 'none';
+                gameBoard.style.display = 'flex';
+                gameResult.style.display = 'none';
+                
+                cells.forEach(cell => {
+                    cell.textContent = '';
+                    cell.className = 'cell';
+                });
+                
+                updateGameStatus();
+            }
+            
+            function updateGameStatus() {
+                if (gameMode === '1-player') {
+                    gameStatus.textContent = currentPlayer === 'X' ? 'Your turn (X)' : 'Computer\'s turn (O)';
+                } else {
+                    gameStatus.textContent = `Player ${currentPlayer}'s turn`;
+                }
+            }
+            
+            cells.forEach(cell => {
+                cell.addEventListener('click', function() {
+                    const index = parseInt(this.getAttribute('data-index'));
+                    
+                    if (boardState[index] !== '' || !gameActive) return;
+                    
+                    makeMove(index, currentPlayer);
+                    
+                    if (checkWin()) {
+                        endGame(`${gameMode === '1-player' && currentPlayer === 'X' ? 'You win!' : 'Player ' + currentPlayer + ' wins!'}`);
+                        return;
+                    } else if (checkTie()) {
+                        endGame('Game ended in a tie!');
+                        return;
+                    }
+                    
+                    currentPlayer = currentPlayer === 'X' ? 'O' : 'X';
+                    updateGameStatus();
+                    
+                    if (gameMode === '1-player' && currentPlayer === 'O' && gameActive) {
+                        setTimeout(makeComputerMove, 500);
+                    }
+                });
+            });
+            
+            function makeMove(index, player) {
+                boardState[index] = player;
+                const cell = document.querySelector(`.cell[data-index="${index}"]`);
+                cell.textContent = player;
+                cell.classList.add(player.toLowerCase());
+            }
+            
+            function makeComputerMove() {
+                if (!gameActive) return;
+                
+                const availableMoves = [];
+                for (let i = 0; i < 9; i++) {
+                    if (boardState[i] === '') availableMoves.push(i);
+                }
+                
+                if (availableMoves.length > 0) {
+                    const randomIndex = Math.floor(Math.random() * availableMoves.length);
+                    const computerMoveIndex = availableMoves[randomIndex];
+                    
+                    makeMove(computerMoveIndex, 'O');
+                    
+                    if (checkWin()) {
+                        endGame('Computer wins!');
+                        return;
+                    } else if (checkTie()) {
+                        endGame('Game ended in a tie!');
+                        return;
+                    }
+                    
+                    currentPlayer = 'X';
+                    updateGameStatus();
+                }
+            }
+            
+            function checkWin() {
+                for (let condition of winningConditions) {
+                    const [a, b, c] = condition;
+                    if (boardState[a] && boardState[a] === boardState[b] && boardState[a] === boardState[c]) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+            
+            function checkTie() {
+                return boardState.every(cell => cell !== '');
+            }
+            
+            function endGame(message) {
+                gameActive = false;
+                resultMessage.textContent = message;
+                gameBoard.style.display = 'none';
+                gameResult.style.display = 'flex';
+            }
+            
+            retryBtn.addEventListener('click', function() {
+                startGame(gameMode);
+            });
+            
+            goBackBtn.addEventListener('click', function() {
+                resetTicTacToe();
+            });
+
+            // Roulette Game Logic
+            const rouletteWheel = document.getElementById('roulette-wheel');
+            const spinButton = document.getElementById('spin-button');
+            const resultDisplay = document.getElementById('result-display');
+            const numbersGrid = document.getElementById('numbers-grid');
+            
+            // Standard American Roulette layout with correct colors
+            const rouletteNumbers = [
+                { number: '0', color: 'green' },
+                { number: '00', color: 'green' },
+                { number: '1', color: 'red' }, { number: '2', color: 'black' }, { number: '3', color: 'red' },
+                { number: '4', color: 'black' }, { number: '5', color: 'red' }, { number: '6', color: 'black' },
+                { number: '7', color: 'red' }, { number: '8', color: 'black' }, { number: '9', color: 'red' },
+                { number: '10', color: 'black' }, { number: '11', color: 'black' }, { number: '12', color: 'red' },
+                { number: '13', color: 'black' }, { number: '14', color: 'red' }, { number: '15', color: 'black' },
+                { number: '16', color: 'red' }, { number: '17', color: 'black' }, { number: '18', color: 'red' },
+                { number: '19', color: 'red' }, { number: '20', color: 'black' }, { number: '21', color: 'red' },
+                { number: '22', color: 'black' }, { number: '23', color: 'red' }, { number: '24', color: 'black' },
+                { number: '25', color: 'red' }, { number: '26', color: 'black' }, { number: '27', color: 'red' },
+                { number: '28', color: 'black' }, { number: '29', color: 'black' }, { number: '30', color: 'red' },
+                { number: '31', color: 'black' }, { number: '32', color: 'red' }, { number: '33', color: 'black' },
+                { number: '34', color: 'red' }, { number: '35', color: 'black' }, { number: '36', color: 'red' }
+            ];
+            
+            // Standard roulette table order (3 columns, 12 rows)
+            const rouletteTableOrder = [
+                // Column 1: 3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 33, 36
+                3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 33, 36,
+                // Column 2: 2, 5, 8, 11, 14, 17, 20, 23, 26, 29, 32, 35
+                2, 5, 8, 11, 14, 17, 20, 23, 26, 29, 32, 35,
+                // Column 3: 1, 4, 7, 10, 13, 16, 19, 22, 25, 28, 31, 34
+                1, 4, 7, 10, 13, 16, 19, 22, 25, 28, 31, 34
+            ];
+            
+            let isSpinning = false;
+            
+            // Initialize roulette wheel and table
+            function initializeRoulette() {
+                createWheel();
+                createNumberGrid();
+            }
+            
+            function createWheel() {
+                rouletteWheel.innerHTML = '';
+                const totalSegments = 38;
+                const degreesPerSegment = 360 / totalSegments;
+                
+                // American roulette wheel order (starting from 0)
+                const wheelOrder = [
+                    '0', '28', '9', '26', '30', '11', '7', '20', '32', '17', '5', '22', '34', '15', '3', '24', '36', '13', '1',
+                    '00', '27', '10', '25', '29', '12', '8', '19', '31', '18', '6', '21', '33', '16', '4', '23', '35', '14', '2'
+                ];
+                
+                for (let i = 0; i < totalSegments; i++) {
+                    const segment = document.createElement('div');
+                    segment.className = 'wheel-segment';
+                    const number = wheelOrder[i];
+                    
+                    // Set segment color
+                    if (number === '0' || number === '00') {
+                        segment.classList.add('segment-green');
+                    } else {
+                        const numberData = rouletteNumbers.find(item => item.number === number);
+                        if (numberData) {
+                            segment.classList.add(numberData.color === 'red' ? 'segment-red' : 'segment-black');
+                        }
+                    }
+                    
+                    segment.textContent = number;
+                    segment.style.transform = `rotate(${i * degreesPerSegment}deg) skewY(${90 - degreesPerSegment}deg)`;
+                    rouletteWheel.appendChild(segment);
+                }
+            }
+            
+            function createNumberGrid() {
+                numbersGrid.innerHTML = '';
+                
+                // Create numbers in correct roulette table order (3 columns, 12 rows)
+                for (let i = 0; i < 36; i++) {
+                    const numberCell = document.createElement('div');
+                    numberCell.className = 'number-cell';
+                    const number = rouletteTableOrder[i];
+                    numberCell.textContent = number;
+                    numberCell.setAttribute('data-number', number);
+                    
+                    // Set color based on roulette rules
+                    const numberData = rouletteNumbers.find(item => item.number === number.toString());
+                    if (numberData) {
+                        numberCell.classList.add(numberData.color === 'red' ? 'number-red' : 'number-black');
+                    }
+                    
+                    numbersGrid.appendChild(numberCell);
+                }
+            }
+            
+            function resetRoulette() {
+                resultDisplay.style.display = 'none';
+                resultDisplay.textContent = '';
+                
+                // Remove highlights from all number cells
+                document.querySelectorAll('.number-cell, .zero-cell').forEach(cell => {
+                    cell.classList.remove('highlighted');
+                });
+                
+                isSpinning = false;
+                spinButton.disabled = false;
+                rouletteWheel.style.transform = 'rotate(0deg)';
+            }
+            
+            spinButton.addEventListener('click', function() {
+                if (isSpinning) return;
+                
+                isSpinning = true;
+                spinButton.disabled = true;
+                resultDisplay.style.display = 'none';
+                
+                // Remove previous highlights
+                document.querySelectorAll('.number-cell, .zero-cell').forEach(cell => {
+                    cell.classList.remove('highlighted');
+                });
+                
+                // Spin animation
+                const spinDuration = 3000;
+                const startTime = Date.now();
+                const startRotation = parseInt(rouletteWheel.style.transform.replace('rotate(', '').replace('deg)', '')) || 0;
+                const randomSpins = 5 + Math.random() * 3;
+                const targetRotation = startRotation + 360 * randomSpins + Math.random() * 360;
+                
+                function animateSpin() {
+                    const currentTime = Date.now();
+                    const elapsed = currentTime - startTime;
+                    const progress = Math.min(elapsed / spinDuration, 1);
+                    
+                    const easeOut = 1 - Math.pow(1 - progress, 3);
+                    const currentRotation = startRotation + (targetRotation - startRotation) * easeOut;
+                    
+                    rouletteWheel.style.transform = `rotate(${currentRotation}deg)`;
+                    
+                    if (progress < 1) {
+                        requestAnimationFrame(animateSpin);
+                    } else {
+                        // Spin complete - determine result
+                        const normalizedRotation = (targetRotation % 360 + 360) % 360;
+                        const segmentSize = 360 / 38;
+                        const winningSegment = Math.floor(normalizedRotation / segmentSize);
+                        
+                        // American roulette wheel order
+                        const wheelOrder = [
+                            '0', '28', '9', '26', '30', '11', '7', '20', '32', '17', '5', '22', '34', '15', '3', '24', '36', '13', '1',
+                            '00', '27', '10', '25', '29', '12', '8', '19', '31', '18', '6', '21', '33', '16', '4', '23', '35', '14', '2'
+                        ];
+                        
+                        const resultNumber = wheelOrder[winningSegment];
+                        
+                        // Display result
+                        const resultData = rouletteNumbers.find(item => item.number === resultNumber);
+                        resultDisplay.textContent = resultNumber;
+                        resultDisplay.style.color = resultData.color === 'green' ? '#0a0' : resultData.color === 'red' ? '#d32f2f' : '#000';
+                        resultDisplay.style.display = 'block';
+                        
+                        // Highlight the winning number on the table
+                        const winningCell = document.querySelector(`[data-number="${resultNumber}"]`);
+                        if (winningCell) {
+                            winningCell.classList.add('highlighted');
+                        }
+                        
+                        isSpinning = false;
+                        spinButton.disabled = false;
+                    }
+                }
+                
+                animateSpin();
+            });
+            
+            // Initialize roulette when page loads
+            initializeRoulette();
+        });
+    </script>
+</body>
+</html>
