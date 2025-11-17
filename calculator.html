@@ -1,0 +1,496 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Calculator - MartianOS</title>
+    <style>
+        /* Global Styles */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Courier New', monospace;
+        }
+
+        body {
+            overflow: hidden;
+            height: 100vh;
+            width: 100vw;
+        }
+
+        #main-container {
+            width: 100%;
+            height: 100%;
+            position: relative;
+        }
+
+        /* Page Styles - All pages are full screen */
+        .page {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            transition: opacity 0.3s;
+        }
+
+        /* Black Page (Matrix-like) */
+        #black-page {
+            background-color: #000;
+            color: #ff0;
+            z-index: 5;
+        }
+
+        #martian-matrix {
+            font-size: 2.5rem;
+            margin-bottom: 2rem;
+            text-shadow: 0 0 10px #ff0;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% { opacity: 0.7; }
+            50% { opacity: 1; }
+            100% { opacity: 0.7; }
+        }
+
+        /* White Page */
+        #white-page {
+            background-color: #fff;
+            color: #000;
+            z-index: 4;
+            display: none;
+        }
+
+        #martian-os {
+            font-size: 3rem;
+            margin-bottom: 2rem;
+        }
+
+        /* Blue Page */
+        #blue-page {
+            background-color: #1a237e;
+            color: #fff;
+            z-index: 3;
+            display: none;
+        }
+
+        .blue-page-title {
+            font-size: 2.5rem;
+            margin-bottom: 3rem;
+        }
+
+        /* Yellow Page - Calculator App */
+        #yellow-page {
+            background-color: #ffeb3b;
+            color: #000;
+            z-index: 2;
+            display: none;
+        }
+
+        /* Purple Page - Placeholder for future app */
+        #purple-page {
+            background-color: #6a1b9a;
+            color: #fff;
+            z-index: 1;
+            display: none;
+        }
+
+        /* Button Styles */
+        .btn {
+            padding: 15px 40px;
+            font-size: 1.2rem;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: all 0.3s;
+            font-weight: bold;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .btn:hover {
+            transform: scale(1.05);
+            box-shadow: 0 0 15px rgba(255, 255, 255, 0.5);
+        }
+
+        .btn-yellow {
+            background-color: #ffeb3b;
+            color: #000;
+        }
+
+        .btn-yellow:hover {
+            background-color: #fff176;
+        }
+
+        .btn-purple {
+            background-color: #6a1b9a;
+            color: #fff;
+        }
+
+        .btn-purple:hover {
+            background-color: #8e24aa;
+        }
+
+        .btn-black {
+            background-color: #000;
+            color: #fff;
+        }
+
+        .btn-black:hover {
+            background-color: #333;
+        }
+
+        .btn-blue {
+            background-color: #03a9f4;
+            color: #fff;
+        }
+
+        .btn-blue:hover {
+            background-color: #29b6f6;
+        }
+
+        /* Button Container for Blue Page */
+        .button-container {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        /* Calculator Styles */
+        .back-button {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            padding: 10px 20px;
+            background-color: #03a9f4;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-weight: bold;
+        }
+
+        .back-button:hover {
+            background-color: #29b6f6;
+        }
+
+        #calculator-container {
+            background-color: white;
+            border: 3px solid black;
+            border-radius: 10px;
+            padding: 30px;
+            width: 90%;
+            max-width: 400px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            color: black;
+            box-shadow: 0 8px 25px rgba(0,0,0,0.3);
+        }
+
+        #calculator-title {
+            font-size: 2rem;
+            margin-bottom: 20px;
+            color: #333;
+        }
+
+        #calculator-display {
+            width: 100%;
+            height: 80px;
+            background-color: #f5f5f5;
+            border: 2px solid #333;
+            border-radius: 5px;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            padding: 0 20px;
+            font-size: 2rem;
+            font-weight: bold;
+            overflow: hidden;
+        }
+
+        .calculator-buttons {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            grid-gap: 10px;
+            width: 100%;
+        }
+
+        .calc-btn {
+            height: 60px;
+            border: 2px solid #333;
+            border-radius: 5px;
+            font-size: 1.2rem;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.2s;
+            background-color: #e0e0e0;
+        }
+
+        .calc-btn:hover {
+            background-color: #d5d5d5;
+            transform: translateY(-2px);
+        }
+
+        .calc-btn.operator {
+            background-color: #ff9800;
+            color: white;
+        }
+
+        .calc-btn.operator:hover {
+            background-color: #f57c00;
+        }
+
+        .calc-btn.equals {
+            background-color: #4caf50;
+            color: white;
+            grid-column: span 2;
+        }
+
+        .calc-btn.equals:hover {
+            background-color: #388e3c;
+        }
+
+        .calc-btn.clear {
+            background-color: #f44336;
+            color: white;
+        }
+
+        .calc-btn.clear:hover {
+            background-color: #d32f2f;
+        }
+    </style>
+</head>
+<body>
+    <div id="main-container">
+        <!-- Black Page -->
+        <div id="black-page" class="page">
+            <h1 id="martian-matrix">MartianMatrix</h1>
+            <button id="enter-btn" class="btn btn-yellow">ENTER</button>
+        </div>
+
+        <!-- White Page -->
+        <div id="white-page" class="page">
+            <h1 id="martian-os">MartianOS</h1>
+            <button id="start-btn" class="btn btn-black">START</button>
+        </div>
+
+        <!-- Blue Page -->
+        <div id="blue-page" class="page">
+            <h1 class="blue-page-title">Application Menu</h1>
+            <div class="button-container">
+                <button id="yellow-app-btn" class="btn btn-yellow">Calculator</button>
+                <button id="purple-app-btn" class="btn btn-purple">Future App</button>
+            </div>
+        </div>
+
+        <!-- Yellow Page - Calculator -->
+        <div id="yellow-page" class="page">
+            <button class="back-button" onclick="goBackToIndex()">← Back to OS</button>
+            <div id="calculator-container">
+                <h2 id="calculator-title">Calculator</h2>
+                <div id="calculator-display">0</div>
+                <div class="calculator-buttons">
+                    <button class="calc-btn clear" onclick="clearDisplay()">C</button>
+                    <button class="calc-btn clear" onclick="deleteLast()">⌫</button>
+                    <button class="calc-btn operator" onclick="appendOperator('/')">/</button>
+                    <button class="calc-btn operator" onclick="appendOperator('*')">×</button>
+                    
+                    <button class="calc-btn" onclick="appendNumber('7')">7</button>
+                    <button class="calc-btn" onclick="appendNumber('8')">8</button>
+                    <button class="calc-btn" onclick="appendNumber('9')">9</button>
+                    <button class="calc-btn operator" onclick="appendOperator('-')">-</button>
+                    
+                    <button class="calc-btn" onclick="appendNumber('4')">4</button>
+                    <button class="calc-btn" onclick="appendNumber('5')">5</button>
+                    <button class="calc-btn" onclick="appendNumber('6')">6</button>
+                    <button class="calc-btn operator" onclick="appendOperator('+')">+</button>
+                    
+                    <button class="calc-btn" onclick="appendNumber('1')">1</button>
+                    <button class="calc-btn" onclick="appendNumber('2')">2</button>
+                    <button class="calc-btn" onclick="appendNumber('3')">3</button>
+                    <button class="calc-btn equals" onclick="calculate()">=</button>
+                    
+                    <button class="calc-btn" onclick="appendNumber('0')">0</button>
+                    <button class="calc-btn" onclick="appendNumber('.')">.</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Purple Page - Placeholder -->
+        <div id="purple-page" class="page">
+            <button class="back-button" onclick="goBackToIndex()">← Back to OS</button>
+            <div style="background-color: white; border: 3px solid black; border-radius: 10px; padding: 30px; text-align: center;">
+                <h2 style="color: #333; margin-bottom: 20px;">Future App</h2>
+                <p style="color: #666; font-size: 1.1rem;">This app is coming soon!</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Page navigation logic
+        document.addEventListener('DOMContentLoaded', function() {
+            // Get all page elements
+            const blackPage = document.getElementById('black-page');
+            const whitePage = document.getElementById('white-page');
+            const bluePage = document.getElementById('blue-page');
+            const yellowPage = document.getElementById('yellow-page');
+            const purplePage = document.getElementById('purple-page');
+            
+            // Navigation buttons
+            const enterBtn = document.getElementById('enter-btn');
+            const startBtn = document.getElementById('start-btn');
+            const yellowAppBtn = document.getElementById('yellow-app-btn');
+            const purpleAppBtn = document.getElementById('purple-app-btn');
+            
+            // Check URL fragment to determine which page to show
+            function checkUrlFragment() {
+                const hash = window.location.hash;
+                if (hash === '#bluepage') {
+                    showPage(bluePage);
+                } else if (hash === '#yellowpage') {
+                    showPage(yellowPage);
+                } else if (hash === '#purplepage') {
+                    showPage(purplePage);
+                } else {
+                    // Default to black page
+                    showPage(blackPage);
+                }
+            }
+            
+            // Navigation functions
+            function showPage(page) {
+                // Hide all pages
+                blackPage.style.display = 'none';
+                whitePage.style.display = 'none';
+                bluePage.style.display = 'none';
+                yellowPage.style.display = 'none';
+                purplePage.style.display = 'none';
+                
+                // Show the requested page
+                page.style.display = 'flex';
+            }
+            
+            // Set up event listeners for navigation
+            enterBtn.addEventListener('click', () => showPage(whitePage));
+            startBtn.addEventListener('click', () => showPage(bluePage));
+            yellowAppBtn.addEventListener('click', () => showPage(yellowPage));
+            purpleAppBtn.addEventListener('click', () => showPage(purplePage));
+            
+            // Check URL fragment on page load
+            checkUrlFragment();
+            
+            // Also check when URL fragment changes
+            window.addEventListener('hashchange', checkUrlFragment);
+        });
+
+        // Function to go back to index.html on blue page
+        function goBackToIndex() {
+            window.location.href = 'index.html#bluepage';
+        }
+
+        // Calculator Logic
+        let currentDisplay = '0';
+        let previousValue = null;
+        let currentOperator = null;
+        let shouldResetDisplay = false;
+
+        function updateDisplay() {
+            const display = document.getElementById('calculator-display');
+            display.textContent = currentDisplay;
+        }
+
+        function appendNumber(number) {
+            if (shouldResetDisplay) {
+                currentDisplay = '';
+                shouldResetDisplay = false;
+            }
+            
+            if (currentDisplay === '0' || currentDisplay === 'Error') {
+                currentDisplay = number;
+            } else {
+                currentDisplay += number;
+            }
+            updateDisplay();
+        }
+
+        function appendOperator(operator) {
+            if (currentOperator !== null) {
+                calculate();
+            }
+            previousValue = parseFloat(currentDisplay);
+            currentOperator = operator;
+            shouldResetDisplay = true;
+        }
+
+        function calculate() {
+            if (currentOperator === null || previousValue === null) return;
+            
+            const currentValue = parseFloat(currentDisplay);
+            let result;
+            
+            try {
+                switch (currentOperator) {
+                    case '+':
+                        result = previousValue + currentValue;
+                        break;
+                    case '-':
+                        result = previousValue - currentValue;
+                        break;
+                    case '*':
+                        result = previousValue * currentValue;
+                        break;
+                    case '/':
+                        if (currentValue === 0) {
+                            throw new Error('Division by zero');
+                        }
+                        result = previousValue / currentValue;
+                        break;
+                    default:
+                        return;
+                }
+                
+                // Round to avoid floating point precision issues
+                currentDisplay = Math.round(result * 100000000) / 100000000;
+                currentOperator = null;
+                previousValue = null;
+                shouldResetDisplay = true;
+                updateDisplay();
+            } catch (error) {
+                currentDisplay = 'Error';
+                currentOperator = null;
+                previousValue = null;
+                shouldResetDisplay = true;
+                updateDisplay();
+            }
+        }
+
+        function clearDisplay() {
+            currentDisplay = '0';
+            currentOperator = null;
+            previousValue = null;
+            shouldResetDisplay = false;
+            updateDisplay();
+        }
+
+        function deleteLast() {
+            if (currentDisplay.length > 1) {
+                currentDisplay = currentDisplay.slice(0, -1);
+            } else {
+                currentDisplay = '0';
+            }
+            updateDisplay();
+        }
+
+        // Initialize calculator display
+        updateDisplay();
+    </script>
+</body>
+</html>
