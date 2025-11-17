@@ -568,6 +568,240 @@
     </div>
 
     <script>
+        // Tic Tac Toe Game Logic - GLOBAL SCOPE
+        const gameSetup = document.getElementById('game-setup');
+        const modeSelection = document.getElementById('mode-selection');
+        const gameBoard = document.getElementById('game-board');
+        const gameResult = document.getElementById('game-result');
+        const tictactoeStart = document.getElementById('tictactoe-start');
+        const onePlayerBtn = document.getElementById('one-player');
+        const twoPlayerBtn = document.getElementById('two-player');
+        const retryBtn = document.getElementById('retry-btn');
+        const goBackBtn = document.getElementById('go-back-btn');
+        const gameStatus = document.getElementById('game-status');
+        const resultMessage = document.getElementById('result-message');
+        const cells = document.querySelectorAll('.cell');
+
+        let currentPlayer = 'X';
+        let gameMode = '';
+        let gameActive = false;
+        let boardState = ['', '', '', '', '', '', '', '', ''];
+
+        const winningConditions = [
+            [0, 1, 2], [3, 4, 5], [6, 7, 8],
+            [0, 3, 6], [1, 4, 7], [2, 5, 8],
+            [0, 4, 8], [2, 4, 6]
+        ];
+
+        function resetTicTacToe() {
+            gameSetup.style.display = 'flex';
+            modeSelection.style.display = 'none';
+            gameBoard.style.display = 'none';
+            gameResult.style.display = 'none';
+            
+            currentPlayer = 'X';
+            gameMode = '';
+            gameActive = false;
+            boardState = ['', '', '', '', '', '', '', '', ''];
+            
+            cells.forEach(cell => {
+                cell.textContent = '';
+                cell.className = 'cell';
+            });
+            
+            gameStatus.textContent = '';
+        }
+
+        function updateGameStatus() {
+            if (gameMode === '1-player') {
+                gameStatus.textContent = currentPlayer === 'X' ? 'Your turn (X)' : 'Computer\'s turn (O)';
+            } else {
+                gameStatus.textContent = `Player ${currentPlayer}'s turn`;
+            }
+        }
+
+        function makeMove(index, player) {
+            boardState[index] = player;
+            const cell = document.querySelector(`.cell[data-index="${index}"]`);
+            cell.textContent = player;
+            cell.classList.add(player.toLowerCase());
+        }
+
+        function makeComputerMove() {
+            if (!gameActive) return;
+            
+            const availableMoves = [];
+            for (let i = 0; i < 9; i++) {
+                if (boardState[i] === '') availableMoves.push(i);
+            }
+            
+            if (availableMoves.length > 0) {
+                const randomIndex = Math.floor(Math.random() * availableMoves.length);
+                const computerMoveIndex = availableMoves[randomIndex];
+                
+                makeMove(computerMoveIndex, 'O');
+                
+                if (checkWin()) {
+                    endGame('Computer wins!');
+                    return;
+                } else if (checkTie()) {
+                    endGame('Game ended in a tie!');
+                    return;
+                }
+                
+                currentPlayer = 'X';
+                updateGameStatus();
+            }
+        }
+
+        function checkWin() {
+            for (let condition of winningConditions) {
+                const [a, b, c] = condition;
+                if (boardState[a] && boardState[a] === boardState[b] && boardState[a] === boardState[c]) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        function checkTie() {
+            return boardState.every(cell => cell !== '');
+        }
+
+        function endGame(message) {
+            gameActive = false;
+            resultMessage.textContent = message;
+            gameBoard.style.display = 'none';
+            gameResult.style.display = 'flex';
+        }
+
+        // Roulette Game Logic - GLOBAL SCOPE
+        const rouletteWheel = document.getElementById('roulette-wheel');
+        const spinButton = document.getElementById('spin-button');
+        const resultDisplay = document.getElementById('result-display');
+        const numbersGrid = document.getElementById('numbers-grid');
+        const pegContainer = document.querySelector('.wheel-peg-container');
+
+        // Standard American Roulette layout with correct colors
+        const rouletteNumbers = [
+            { number: '0', color: 'green' },
+            { number: '00', color: 'green' },
+            { number: '1', color: 'red' }, { number: '2', color: 'black' }, { number: '3', color: 'red' },
+            { number: '4', color: 'black' }, { number: '5', color: 'red' }, { number: '6', color: 'black' },
+            { number: '7', color: 'red' }, { number: '8', color: 'black' }, { number: '9', color: 'red' },
+            { number: '10', color: 'black' }, { number: '11', color: 'black' }, { number: '12', color: 'red' },
+            { number: '13', color: 'black' }, { number: '14', color: 'red' }, { number: '15', color: 'black' },
+            { number: '16', color: 'red' }, { number: '17', color: 'black' }, { number: '18', color: 'red' },
+            { number: '19', color: 'red' }, { number: '20', color: 'black' }, { number: '21', color: 'red' },
+            { number: '22', color: 'black' }, { number: '23', color: 'red' }, { number: '24', color: 'black' },
+            { number: '25', color: 'red' }, { number: '26', color: 'black' }, { number: '27', color: 'red' },
+            { number: '28', color: 'black' }, { number: '29', color: 'black' }, { number: '30', color: 'red' },
+            { number: '31', color: 'black' }, { number: '32', color: 'red' }, { number: '33', color: 'black' },
+            { number: '34', color: 'red' }, { number: '35', color: 'black' }, { number: '36', color: 'red' }
+        ];
+
+        // Standard roulette table order (3 columns, 12 rows)
+        const rouletteTableOrder = [
+            3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 33, 36,
+            2, 5, 8, 11, 14, 17, 20, 23, 26, 29, 32, 35,
+            1, 4, 7, 10, 13, 16, 19, 22, 25, 28, 31, 34
+        ];
+
+        let isSpinning = false;
+        let currentRotation = 0;
+
+        // Initialize roulette wheel and table
+        function initializeRoulette() {
+            createWheel();
+            createNumberGrid();
+        }
+
+        function createWheel() {
+            rouletteWheel.innerHTML = '';
+            pegContainer.innerHTML = '';
+            
+            const totalSegments = 38;
+            const degreesPerSegment = 360 / totalSegments;
+            
+            // American roulette wheel order (starting from 0)
+            const wheelOrder = [
+                '0', '28', '9', '26', '30', '11', '7', '20', '32', '17', '5', '22', '34', '15', '3', '24', '36', '13', '1',
+                '00', '27', '10', '25', '29', '12', '8', '19', '31', '18', '6', '21', '33', '16', '4', '23', '35', '14', '2'
+            ];
+            
+            // Create segments with numbers
+            for (let i = 0; i < totalSegments; i++) {
+                const segment = document.createElement('div');
+                segment.className = 'wheel-segment';
+                const number = wheelOrder[i];
+                
+                // Set segment color
+                if (number === '0' || number === '00') {
+                    segment.classList.add('segment-green');
+                } else {
+                    const numberData = rouletteNumbers.find(item => item.number === number);
+                    if (numberData) {
+                        segment.classList.add(numberData.color === 'red' ? 'segment-red' : 'segment-black');
+                    }
+                }
+                
+                segment.textContent = number;
+                segment.style.transform = `rotate(${i * degreesPerSegment}deg) skewY(${90 - degreesPerSegment}deg)`;
+                rouletteWheel.appendChild(segment);
+            }
+            
+            // Create pegs in the separate container
+            for (let i = 0; i < totalSegments; i++) {
+                const peg = document.createElement('div');
+                peg.className = 'wheel-peg';
+                const angle = i * degreesPerSegment;
+                // Position pegs exactly on the perimeter
+                const radius = 50; // Exactly at the edge
+                const x = 50 + radius * Math.cos((angle - 90) * Math.PI / 180);
+                const y = 50 + radius * Math.sin((angle - 90) * Math.PI / 180);
+                peg.style.left = `${x}%`;
+                peg.style.top = `${y}%`;
+                pegContainer.appendChild(peg);
+            }
+        }
+
+        function createNumberGrid() {
+            numbersGrid.innerHTML = '';
+            
+            // Create numbers in correct roulette table order (3 columns, 12 rows)
+            for (let i = 0; i < 36; i++) {
+                const numberCell = document.createElement('div');
+                numberCell.className = 'number-cell';
+                const number = rouletteTableOrder[i];
+                numberCell.textContent = number;
+                numberCell.setAttribute('data-number', number);
+                
+                // Set color based on roulette rules
+                const numberData = rouletteNumbers.find(item => item.number === number.toString());
+                if (numberData) {
+                    numberCell.classList.add(numberData.color === 'red' ? 'number-red' : 'number-black');
+                }
+                
+                numbersGrid.appendChild(numberCell);
+            }
+        }
+
+        function resetRoulette() {
+            resultDisplay.style.display = 'none';
+            resultDisplay.textContent = '';
+            
+            // Remove highlights from all number cells
+            document.querySelectorAll('.number-cell, .zero-cell').forEach(cell => {
+                cell.classList.remove('highlighted');
+            });
+            
+            isSpinning = false;
+            spinButton.disabled = false;
+            currentRotation = 0;
+            rouletteWheel.style.transform = 'rotate(0deg)';
+            pegContainer.style.transform = 'rotate(0deg)';
+        }
+
         // Page navigation logic
         document.addEventListener('DOMContentLoaded', function() {
             // Get all page elements
@@ -588,7 +822,6 @@
             // Check URL fragment to determine which page to show
             function checkUrlFragment() {
                 const hash = window.location.hash;
-                console.log('URL Fragment:', hash); // Debug log
                 if (hash === '#bluepage') {
                     showPage(bluePage);
                 } else {
@@ -633,56 +866,7 @@
                 button.addEventListener('click', () => showPage(bluePage));
             });
             
-            // Check URL fragment on page load
-            checkUrlFragment();
-            
-            // Also check when URL fragment changes
-            window.addEventListener('hashchange', checkUrlFragment);
-            
-            // Tic Tac Toe Game Logic
-            const gameSetup = document.getElementById('game-setup');
-            const modeSelection = document.getElementById('mode-selection');
-            const gameBoard = document.getElementById('game-board');
-            const gameResult = document.getElementById('game-result');
-            const tictactoeStart = document.getElementById('tictactoe-start');
-            const onePlayerBtn = document.getElementById('one-player');
-            const twoPlayerBtn = document.getElementById('two-player');
-            const retryBtn = document.getElementById('retry-btn');
-            const goBackBtn = document.getElementById('go-back-btn');
-            const gameStatus = document.getElementById('game-status');
-            const resultMessage = document.getElementById('result-message');
-            const cells = document.querySelectorAll('.cell');
-            
-            let currentPlayer = 'X';
-            let gameMode = '';
-            let gameActive = false;
-            let boardState = ['', '', '', '', '', '', '', '', ''];
-            
-            const winningConditions = [
-                [0, 1, 2], [3, 4, 5], [6, 7, 8],
-                [0, 3, 6], [1, 4, 7], [2, 5, 8],
-                [0, 4, 8], [2, 4, 6]
-            ];
-            
-            function resetTicTacToe() {
-                gameSetup.style.display = 'flex';
-                modeSelection.style.display = 'none';
-                gameBoard.style.display = 'none';
-                gameResult.style.display = 'none';
-                
-                currentPlayer = 'X';
-                gameMode = '';
-                gameActive = false;
-                boardState = ['', '', '', '', '', '', '', '', ''];
-                
-                cells.forEach(cell => {
-                    cell.textContent = '';
-                    cell.className = 'cell';
-                });
-                
-                gameStatus.textContent = '';
-            }
-            
+            // Tic Tac Toe Event Listeners
             tictactoeStart.addEventListener('click', function() {
                 gameSetup.style.display = 'none';
                 modeSelection.style.display = 'flex';
@@ -713,14 +897,6 @@
                 updateGameStatus();
             }
             
-            function updateGameStatus() {
-                if (gameMode === '1-player') {
-                    gameStatus.textContent = currentPlayer === 'X' ? 'Your turn (X)' : 'Computer\'s turn (O)';
-                } else {
-                    gameStatus.textContent = `Player ${currentPlayer}'s turn`;
-                }
-            }
-            
             cells.forEach(cell => {
                 cell.addEventListener('click', function() {
                     const index = parseInt(this.getAttribute('data-index'));
@@ -746,61 +922,6 @@
                 });
             });
             
-            function makeMove(index, player) {
-                boardState[index] = player;
-                const cell = document.querySelector(`.cell[data-index="${index}"]`);
-                cell.textContent = player;
-                cell.classList.add(player.toLowerCase());
-            }
-            
-            function makeComputerMove() {
-                if (!gameActive) return;
-                
-                const availableMoves = [];
-                for (let i = 0; i < 9; i++) {
-                    if (boardState[i] === '') availableMoves.push(i);
-                }
-                
-                if (availableMoves.length > 0) {
-                    const randomIndex = Math.floor(Math.random() * availableMoves.length);
-                    const computerMoveIndex = availableMoves[randomIndex];
-                    
-                    makeMove(computerMoveIndex, 'O');
-                    
-                    if (checkWin()) {
-                        endGame('Computer wins!');
-                        return;
-                    } else if (checkTie()) {
-                        endGame('Game ended in a tie!');
-                        return;
-                    }
-                    
-                    currentPlayer = 'X';
-                    updateGameStatus();
-                }
-            }
-            
-            function checkWin() {
-                for (let condition of winningConditions) {
-                    const [a, b, c] = condition;
-                    if (boardState[a] && boardState[a] === boardState[b] && boardState[a] === boardState[c]) {
-                        return true;
-                    }
-                }
-                return false;
-            }
-            
-            function checkTie() {
-                return boardState.every(cell => cell !== '');
-            }
-            
-            function endGame(message) {
-                gameActive = false;
-                resultMessage.textContent = message;
-                gameBoard.style.display = 'none';
-                gameResult.style.display = 'flex';
-            }
-            
             retryBtn.addEventListener('click', function() {
                 startGame(gameMode);
             });
@@ -809,133 +930,7 @@
                 resetTicTacToe();
             });
 
-            // Roulette Game Logic
-            const rouletteWheel = document.getElementById('roulette-wheel');
-            const spinButton = document.getElementById('spin-button');
-            const resultDisplay = document.getElementById('result-display');
-            const numbersGrid = document.getElementById('numbers-grid');
-            const pegContainer = document.querySelector('.wheel-peg-container');
-            
-            // Standard American Roulette layout with correct colors
-            const rouletteNumbers = [
-                { number: '0', color: 'green' },
-                { number: '00', color: 'green' },
-                { number: '1', color: 'red' }, { number: '2', color: 'black' }, { number: '3', color: 'red' },
-                { number: '4', color: 'black' }, { number: '5', color: 'red' }, { number: '6', color: 'black' },
-                { number: '7', color: 'red' }, { number: '8', color: 'black' }, { number: '9', color: 'red' },
-                { number: '10', color: 'black' }, { number: '11', color: 'black' }, { number: '12', color: 'red' },
-                { number: '13', color: 'black' }, { number: '14', color: 'red' }, { number: '15', color: 'black' },
-                { number: '16', color: 'red' }, { number: '17', color: 'black' }, { number: '18', color: 'red' },
-                { number: '19', color: 'red' }, { number: '20', color: 'black' }, { number: '21', color: 'red' },
-                { number: '22', color: 'black' }, { number: '23', color: 'red' }, { number: '24', color: 'black' },
-                { number: '25', color: 'red' }, { number: '26', color: 'black' }, { number: '27', color: 'red' },
-                { number: '28', color: 'black' }, { number: '29', color: 'black' }, { number: '30', color: 'red' },
-                { number: '31', color: 'black' }, { number: '32', color: 'red' }, { number: '33', color: 'black' },
-                { number: '34', color: 'red' }, { number: '35', color: 'black' }, { number: '36', color: 'red' }
-            ];
-            
-            // Standard roulette table order (3 columns, 12 rows)
-            const rouletteTableOrder = [
-                3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 33, 36,
-                2, 5, 8, 11, 14, 17, 20, 23, 26, 29, 32, 35,
-                1, 4, 7, 10, 13, 16, 19, 22, 25, 28, 31, 34
-            ];
-            
-            let isSpinning = false;
-            let currentRotation = 0;
-            
-            // Initialize roulette wheel and table
-            function initializeRoulette() {
-                createWheel();
-                createNumberGrid();
-            }
-            
-            function createWheel() {
-                rouletteWheel.innerHTML = '';
-                pegContainer.innerHTML = '';
-                
-                const totalSegments = 38;
-                const degreesPerSegment = 360 / totalSegments;
-                
-                // American roulette wheel order (starting from 0)
-                const wheelOrder = [
-                    '0', '28', '9', '26', '30', '11', '7', '20', '32', '17', '5', '22', '34', '15', '3', '24', '36', '13', '1',
-                    '00', '27', '10', '25', '29', '12', '8', '19', '31', '18', '6', '21', '33', '16', '4', '23', '35', '14', '2'
-                ];
-                
-                // Create segments with numbers
-                for (let i = 0; i < totalSegments; i++) {
-                    const segment = document.createElement('div');
-                    segment.className = 'wheel-segment';
-                    const number = wheelOrder[i];
-                    
-                    // Set segment color
-                    if (number === '0' || number === '00') {
-                        segment.classList.add('segment-green');
-                    } else {
-                        const numberData = rouletteNumbers.find(item => item.number === number);
-                        if (numberData) {
-                            segment.classList.add(numberData.color === 'red' ? 'segment-red' : 'segment-black');
-                        }
-                    }
-                    
-                    segment.textContent = number;
-                    segment.style.transform = `rotate(${i * degreesPerSegment}deg) skewY(${90 - degreesPerSegment}deg)`;
-                    rouletteWheel.appendChild(segment);
-                }
-                
-                // Create pegs in the separate container
-                for (let i = 0; i < totalSegments; i++) {
-                    const peg = document.createElement('div');
-                    peg.className = 'wheel-peg';
-                    const angle = i * degreesPerSegment;
-                    // Position pegs exactly on the perimeter
-                    const radius = 50; // Exactly at the edge
-                    const x = 50 + radius * Math.cos((angle - 90) * Math.PI / 180);
-                    const y = 50 + radius * Math.sin((angle - 90) * Math.PI / 180);
-                    peg.style.left = `${x}%`;
-                    peg.style.top = `${y}%`;
-                    pegContainer.appendChild(peg);
-                }
-            }
-            
-            function createNumberGrid() {
-                numbersGrid.innerHTML = '';
-                
-                // Create numbers in correct roulette table order (3 columns, 12 rows)
-                for (let i = 0; i < 36; i++) {
-                    const numberCell = document.createElement('div');
-                    numberCell.className = 'number-cell';
-                    const number = rouletteTableOrder[i];
-                    numberCell.textContent = number;
-                    numberCell.setAttribute('data-number', number);
-                    
-                    // Set color based on roulette rules
-                    const numberData = rouletteNumbers.find(item => item.number === number.toString());
-                    if (numberData) {
-                        numberCell.classList.add(numberData.color === 'red' ? 'number-red' : 'number-black');
-                    }
-                    
-                    numbersGrid.appendChild(numberCell);
-                }
-            }
-            
-            function resetRoulette() {
-                resultDisplay.style.display = 'none';
-                resultDisplay.textContent = '';
-                
-                // Remove highlights from all number cells
-                document.querySelectorAll('.number-cell, .zero-cell').forEach(cell => {
-                    cell.classList.remove('highlighted');
-                });
-                
-                isSpinning = false;
-                spinButton.disabled = false;
-                currentRotation = 0;
-                rouletteWheel.style.transform = 'rotate(0deg)';
-                pegContainer.style.transform = 'rotate(0deg)';
-            }
-            
+            // Roulette Event Listeners
             spinButton.addEventListener('click', function() {
                 if (isSpinning) return;
                 
@@ -1003,6 +998,12 @@
                 
                 animateSpin();
             });
+            
+            // Check URL fragment on page load
+            checkUrlFragment();
+            
+            // Also check when URL fragment changes
+            window.addEventListener('hashchange', checkUrlFragment);
             
             // Initialize roulette when page loads
             initializeRoulette();
