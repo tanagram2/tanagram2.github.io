@@ -262,7 +262,7 @@
         <!-- White Page -->
         <div id="white-page" class="page">
             <h1 id="martian-os">MartianOS</h1>
-            <button id="start-btn" class="btn btn-yellow">START</button>
+            <button id="start-btn" class="btn btn-black">START</button>
         </div>
 
         <!-- Blue Page -->
@@ -310,60 +310,73 @@
 
     <script>
         // Page navigation logic
-    document.addEventListener('DOMContentLoaded', function() {
-        // Get all page elements
-        const blackPage = document.getElementById('black-page');
-        const whitePage = document.getElementById('white-page');
-        const bluePage = document.getElementById('blue-page');
-        const yellowPage = document.getElementById('yellow-page');
-        
-        // Navigation buttons
-        const enterBtn = document.getElementById('enter-btn');
-        const startBtn = document.getElementById('start-btn');
-        const yellowAppBtn = document.getElementById('yellow-app-btn');
-        
-        // Check URL fragment to determine which page to show
-        function checkUrlFragment() {
-            const hash = window.location.hash;
-            if (hash === '#bluepage') {
-                showPage(bluePage);
-            } else if (hash === '#yellowpage') {
-                showPage(yellowPage);
-            } else {
-                // Default to black page
-                showPage(blackPage);
-            }
-        }
-        
-        // Navigation functions
-        function showPage(page) {
-            // Hide all pages
-            blackPage.style.display = 'none';
-            whitePage.style.display = 'none';
-            bluePage.style.display = 'none';
-            yellowPage.style.display = 'none';
+        document.addEventListener('DOMContentLoaded', function() {
+            // Get all page elements
+            const blackPage = document.getElementById('black-page');
+            const whitePage = document.getElementById('white-page');
+            const bluePage = document.getElementById('blue-page');
+            const yellowPage = document.getElementById('yellow-page');
             
-            // Show the requested page
-            page.style.display = 'flex';
+            // Navigation buttons
+            const enterBtn = document.getElementById('enter-btn');
+            const startBtn = document.getElementById('start-btn');
+            const yellowAppBtn = document.getElementById('yellow-app-btn');
+            
+            // Check URL fragment to determine which page to show
+            function checkUrlFragment() {
+                const hash = window.location.hash;
+                console.log('Current hash:', hash); // Debug log
+                
+                if (hash === '#yellowpage') {
+                    // If coming from index.html, go directly to yellow page
+                    showPage(yellowPage);
+                } else if (hash === '#bluepage') {
+                    showPage(bluePage);
+                } else {
+                    // Default to black page
+                    showPage(blackPage);
+                }
+            }
+            
+            // Navigation functions
+            function showPage(page) {
+                // Hide all pages
+                blackPage.style.display = 'none';
+                whitePage.style.display = 'none';
+                bluePage.style.display = 'none';
+                yellowPage.style.display = 'none';
+                
+                // Show the requested page
+                page.style.display = 'flex';
+            }
+            
+            // Set up event listeners for navigation
+            enterBtn.addEventListener('click', () => {
+                showPage(whitePage);
+                window.location.hash = 'whitepage';
+            });
+            
+            startBtn.addEventListener('click', () => {
+                showPage(bluePage);
+                window.location.hash = 'bluepage';
+            });
+            
+            yellowAppBtn.addEventListener('click', () => {
+                showPage(yellowPage);
+                window.location.hash = 'yellowpage';
+            });
+            
+            // Check URL fragment on page load
+            checkUrlFragment();
+            
+            // Also check when URL fragment changes
+            window.addEventListener('hashchange', checkUrlFragment);
+        });
+
+        // Function to go back to index.html on blue page
+        function goBackToIndex() {
+            window.location.href = 'index.html#bluepage';
         }
-        
-        // Set up event listeners for navigation
-        enterBtn.addEventListener('click', () => showPage(whitePage));
-        startBtn.addEventListener('click', () => showPage(bluePage));
-        yellowAppBtn.addEventListener('click', () => showPage(yellowPage));
-        
-        // Check URL fragment on page load
-        checkUrlFragment();
-        
-        // Also check when URL fragment changes
-        window.addEventListener('hashchange', checkUrlFragment);
-    });
-
-    // Function to go back to index.html on blue page
-    function goBackToIndex() {
-        window.location.href = 'index.html#bluepage';
-    }
-
 
         // Calculator Logic
         let currentDisplay = '0';
@@ -434,4 +447,32 @@
                 updateDisplay();
             } catch (error) {
                 currentDisplay = 'Error';
-               
+                currentOperator = null;
+                previousValue = null;
+                shouldResetDisplay = true;
+                updateDisplay();
+            }
+        }
+
+        function clearDisplay() {
+            currentDisplay = '0';
+            currentOperator = null;
+            previousValue = null;
+            shouldResetDisplay = false;
+            updateDisplay();
+        }
+
+        function deleteLast() {
+            if (currentDisplay.length > 1) {
+                currentDisplay = currentDisplay.slice(0, -1);
+            } else {
+                currentDisplay = '0';
+            }
+            updateDisplay();
+        }
+
+        // Initialize calculator display
+        updateDisplay();
+    </script>
+</body>
+</html>
