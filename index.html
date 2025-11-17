@@ -130,13 +130,13 @@
             background-color: #fff176;
         }
 
-        .btn-grey {
-            background-color: #9e9e9e;
+        .btn-black {
+            background-color: #000;
             color: #fff;
         }
 
-        .btn-grey:hover {
-            background-color: #bdbdbd;
+        .btn-black:hover {
+            background-color: #333;
         }
 
         /* Button Container for Blue Page */
@@ -158,7 +158,7 @@
         <!-- White Page -->
         <div id="white-page" class="page">
             <h1 id="martian-os">MartianOS</h1>
-            <button id="start-btn" class="btn btn-green">START</button>
+            <button id="start-btn" class="btn btn-black">START</button>
         </div>
 
         <!-- Blue Page - Main Hub -->
@@ -168,7 +168,6 @@
                 <button id="tictactoe-app-btn" class="btn btn-red">Tic Tac Toe</button>
                 <button id="roulette-app-btn" class="btn btn-green">Roulette</button>
                 <button id="calculator-app-btn" class="btn btn-yellow">Calculator</button>
-                <button class="btn btn-grey">Placeholder</button>
             </div>
         </div>
     </div>
@@ -213,13 +212,13 @@
             enterBtn.addEventListener('click', () => showPage(whitePage));
             startBtn.addEventListener('click', () => showPage(bluePage));
             tictactoeAppBtn.addEventListener('click', () => {
-                window.location.href = 'tictactoe.html#bluepage';
+                window.location.href = 'tictactoe.html#redpage';
             });
             rouletteAppBtn.addEventListener('click', () => {
-                window.location.href = 'roulette.html#bluepage';
+                window.location.href = 'roulette.html#greenpage';
             });
             calculatorAppBtn.addEventListener('click', () => {
-                window.location.href = 'calculator.html#bluepage';
+                window.location.href = 'calculator.html#yellowpage';
             });
             
             // Check URL fragment on page load
