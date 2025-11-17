@@ -409,62 +409,63 @@
 
     <script>
         // Page navigation logic
-        document.addEventListener('DOMContentLoaded', function() {
-            // Get all page elements
-            const blackPage = document.getElementById('black-page');
-            const whitePage = document.getElementById('white-page');
-            const bluePage = document.getElementById('blue-page');
-            const greenPage = document.getElementById('green-page');
-            
-            // Navigation buttons
-            const enterBtn = document.getElementById('enter-btn');
-            const startBtn = document.getElementById('start-btn');
-            const greenAppBtn = document.getElementById('green-app-btn');
-            
-            // Check URL fragment to determine which page to show
-            function checkUrlFragment() {
-                const hash = window.location.hash;
-                if (hash === '#bluepage') {
-                    showPage(bluePage);
-                } else if (hash === '#greenpage') {
-                    showPage(greenPage);
-                } else {
-                    // Default to black page
-                    showPage(blackPage);
-                }
+    document.addEventListener('DOMContentLoaded', function() {
+        // Get all page elements
+        const blackPage = document.getElementById('black-page');
+        const whitePage = document.getElementById('white-page');
+        const bluePage = document.getElementById('blue-page');
+        const greenPage = document.getElementById('green-page');
+        
+        // Navigation buttons
+        const enterBtn = document.getElementById('enter-btn');
+        const startBtn = document.getElementById('start-btn');
+        const greenAppBtn = document.getElementById('green-app-btn');
+        
+        // Check URL fragment to determine which page to show
+        function checkUrlFragment() {
+            const hash = window.location.hash;
+            if (hash === '#bluepage') {
+                showPage(bluePage);
+            } else if (hash === '#greenpage') {
+                showPage(greenPage);
+            } else {
+                // Default to black page
+                showPage(blackPage);
             }
-            
-            // Navigation functions
-            function showPage(page) {
-                // Hide all pages
-                blackPage.style.display = 'none';
-                whitePage.style.display = 'none';
-                bluePage.style.display = 'none';
-                greenPage.style.display = 'none';
-                
-                // Show the requested page
-                page.style.display = 'flex';
-            }
-            
-            // Set up event listeners for navigation
-            enterBtn.addEventListener('click', () => showPage(whitePage));
-            startBtn.addEventListener('click', () => showPage(bluePage));
-            greenAppBtn.addEventListener('click', () => showPage(greenPage));
-            
-            // Check URL fragment on page load
-            checkUrlFragment();
-            
-            // Also check when URL fragment changes
-            window.addEventListener('hashchange', checkUrlFragment);
-            
-            // Initialize roulette when page loads
-            initializeRoulette();
-        });
-
-        // Function to go back to index.html on blue page
-        function goBackToIndex() {
-            window.location.href = 'index.html#bluepage';
         }
+        
+        // Navigation functions
+        function showPage(page) {
+            // Hide all pages
+            blackPage.style.display = 'none';
+            whitePage.style.display = 'none';
+            bluePage.style.display = 'none';
+            greenPage.style.display = 'none';
+            
+            // Show the requested page
+            page.style.display = 'flex';
+        }
+        
+        // Set up event listeners for navigation
+        enterBtn.addEventListener('click', () => showPage(whitePage));
+        startBtn.addEventListener('click', () => showPage(bluePage));
+        greenAppBtn.addEventListener('click', () => showPage(greenPage));
+        
+        // Check URL fragment on page load
+        checkUrlFragment();
+        
+        // Also check when URL fragment changes
+        window.addEventListener('hashchange', checkUrlFragment);
+        
+        // Initialize roulette when page loads
+        initializeRoulette();
+    });
+
+    // Function to go back to index.html on blue page
+    function goBackToIndex() {
+        window.location.href = 'index.html#bluepage';
+    }
+
 
         // Roulette Game Logic
         const rouletteWheel = document.getElementById('roulette-wheel');
