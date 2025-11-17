@@ -93,14 +93,6 @@
             display: none;
         }
 
-        /* Purple Page - Placeholder for future app */
-        #purple-page {
-            background-color: #6a1b9a;
-            color: #fff;
-            z-index: 1;
-            display: none;
-        }
-
         /* Button Styles */
         .btn {
             padding: 15px 40px;
@@ -128,13 +120,13 @@
             background-color: #fff176;
         }
 
-        .btn-purple {
-            background-color: #6a1b9a;
+        .btn-grey {
+            background-color: #9e9e9e;
             color: #fff;
         }
 
-        .btn-purple:hover {
-            background-color: #8e24aa;
+        .btn-grey:hover {
+            background-color: #bdbdbd;
         }
 
         .btn-black {
@@ -144,15 +136,6 @@
 
         .btn-black:hover {
             background-color: #333;
-        }
-
-        .btn-blue {
-            background-color: #03a9f4;
-            color: #fff;
-        }
-
-        .btn-blue:hover {
-            background-color: #29b6f6;
         }
 
         /* Button Container for Blue Page */
@@ -279,7 +262,7 @@
         <!-- White Page -->
         <div id="white-page" class="page">
             <h1 id="martian-os">MartianOS</h1>
-            <button id="start-btn" class="btn btn-black">START</button>
+            <button id="start-btn" class="btn btn-yellow">START</button>
         </div>
 
         <!-- Blue Page -->
@@ -287,7 +270,7 @@
             <h1 class="blue-page-title">Application Menu</h1>
             <div class="button-container">
                 <button id="yellow-app-btn" class="btn btn-yellow">Calculator</button>
-                <button id="purple-app-btn" class="btn btn-purple">Future App</button>
+                <button class="btn btn-grey">Placeholder</button>
             </div>
         </div>
 
@@ -323,15 +306,6 @@
                 </div>
             </div>
         </div>
-
-        <!-- Purple Page - Placeholder -->
-        <div id="purple-page" class="page">
-            <button class="back-button" onclick="goBackToIndex()">← Back to OS</button>
-            <div style="background-color: white; border: 3px solid black; border-radius: 10px; padding: 30px; text-align: center;">
-                <h2 style="color: #333; margin-bottom: 20px;">Future App</h2>
-                <p style="color: #666; font-size: 1.1rem;">This app is coming soon!</p>
-            </div>
-        </div>
     </div>
 
     <script>
@@ -342,13 +316,11 @@
             const whitePage = document.getElementById('white-page');
             const bluePage = document.getElementById('blue-page');
             const yellowPage = document.getElementById('yellow-page');
-            const purplePage = document.getElementById('purple-page');
             
             // Navigation buttons
             const enterBtn = document.getElementById('enter-btn');
             const startBtn = document.getElementById('start-btn');
             const yellowAppBtn = document.getElementById('yellow-app-btn');
-            const purpleAppBtn = document.getElementById('purple-app-btn');
             
             // Check URL fragment to determine which page to show
             function checkUrlFragment() {
@@ -357,8 +329,6 @@
                     showPage(bluePage);
                 } else if (hash === '#yellowpage') {
                     showPage(yellowPage);
-                } else if (hash === '#purplepage') {
-                    showPage(purplePage);
                 } else {
                     // Default to black page
                     showPage(blackPage);
@@ -372,7 +342,6 @@
                 whitePage.style.display = 'none';
                 bluePage.style.display = 'none';
                 yellowPage.style.display = 'none';
-                purplePage.style.display = 'none';
                 
                 // Show the requested page
                 page.style.display = 'flex';
@@ -382,7 +351,6 @@
             enterBtn.addEventListener('click', () => showPage(whitePage));
             startBtn.addEventListener('click', () => showPage(bluePage));
             yellowAppBtn.addEventListener('click', () => showPage(yellowPage));
-            purpleAppBtn.addEventListener('click', () => showPage(purplePage));
             
             // Check URL fragment on page load
             checkUrlFragment();
@@ -465,32 +433,4 @@
                 updateDisplay();
             } catch (error) {
                 currentDisplay = 'Error';
-                currentOperator = null;
-                previousValue = null;
-                shouldResetDisplay = true;
-                updateDisplay();
-            }
-        }
-
-        function clearDisplay() {
-            currentDisplay = '0';
-            currentOperator = null;
-            previousValue = null;
-            shouldResetDisplay = false;
-            updateDisplay();
-        }
-
-        function deleteLast() {
-            if (currentDisplay.length > 1) {
-                currentDisplay = currentDisplay.slice(0, -1);
-            } else {
-                currentDisplay = '0';
-            }
-            updateDisplay();
-        }
-
-        // Initialize calculator display
-        updateDisplay();
-    </script>
-</body>
-</html>
+               
