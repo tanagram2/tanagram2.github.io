@@ -310,59 +310,60 @@
 
     <script>
         // Page navigation logic
-        document.addEventListener('DOMContentLoaded', function() {
-            // Get all page elements
-            const blackPage = document.getElementById('black-page');
-            const whitePage = document.getElementById('white-page');
-            const bluePage = document.getElementById('blue-page');
-            const yellowPage = document.getElementById('yellow-page');
-            
-            // Navigation buttons
-            const enterBtn = document.getElementById('enter-btn');
-            const startBtn = document.getElementById('start-btn');
-            const yellowAppBtn = document.getElementById('yellow-app-btn');
-            
-            // Check URL fragment to determine which page to show
-            function checkUrlFragment() {
-                const hash = window.location.hash;
-                if (hash === '#bluepage') {
-                    showPage(bluePage);
-                } else if (hash === '#yellowpage') {
-                    showPage(yellowPage);
-                } else {
-                    // Default to black page
-                    showPage(blackPage);
-                }
+    document.addEventListener('DOMContentLoaded', function() {
+        // Get all page elements
+        const blackPage = document.getElementById('black-page');
+        const whitePage = document.getElementById('white-page');
+        const bluePage = document.getElementById('blue-page');
+        const yellowPage = document.getElementById('yellow-page');
+        
+        // Navigation buttons
+        const enterBtn = document.getElementById('enter-btn');
+        const startBtn = document.getElementById('start-btn');
+        const yellowAppBtn = document.getElementById('yellow-app-btn');
+        
+        // Check URL fragment to determine which page to show
+        function checkUrlFragment() {
+            const hash = window.location.hash;
+            if (hash === '#bluepage') {
+                showPage(bluePage);
+            } else if (hash === '#yellowpage') {
+                showPage(yellowPage);
+            } else {
+                // Default to black page
+                showPage(blackPage);
             }
-            
-            // Navigation functions
-            function showPage(page) {
-                // Hide all pages
-                blackPage.style.display = 'none';
-                whitePage.style.display = 'none';
-                bluePage.style.display = 'none';
-                yellowPage.style.display = 'none';
-                
-                // Show the requested page
-                page.style.display = 'flex';
-            }
-            
-            // Set up event listeners for navigation
-            enterBtn.addEventListener('click', () => showPage(whitePage));
-            startBtn.addEventListener('click', () => showPage(bluePage));
-            yellowAppBtn.addEventListener('click', () => showPage(yellowPage));
-            
-            // Check URL fragment on page load
-            checkUrlFragment();
-            
-            // Also check when URL fragment changes
-            window.addEventListener('hashchange', checkUrlFragment);
-        });
-
-        // Function to go back to index.html on blue page
-        function goBackToIndex() {
-            window.location.href = 'index.html#bluepage';
         }
+        
+        // Navigation functions
+        function showPage(page) {
+            // Hide all pages
+            blackPage.style.display = 'none';
+            whitePage.style.display = 'none';
+            bluePage.style.display = 'none';
+            yellowPage.style.display = 'none';
+            
+            // Show the requested page
+            page.style.display = 'flex';
+        }
+        
+        // Set up event listeners for navigation
+        enterBtn.addEventListener('click', () => showPage(whitePage));
+        startBtn.addEventListener('click', () => showPage(bluePage));
+        yellowAppBtn.addEventListener('click', () => showPage(yellowPage));
+        
+        // Check URL fragment on page load
+        checkUrlFragment();
+        
+        // Also check when URL fragment changes
+        window.addEventListener('hashchange', checkUrlFragment);
+    });
+
+    // Function to go back to index.html on blue page
+    function goBackToIndex() {
+        window.location.href = 'index.html#bluepage';
+    }
+
 
         // Calculator Logic
         let currentDisplay = '0';
