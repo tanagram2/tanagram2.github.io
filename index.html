@@ -585,6 +585,18 @@
             const yellowAppBtn = document.getElementById('yellow-app-btn');
             const backButtons = document.querySelectorAll('.back-button');
             
+            // Check URL fragment to determine which page to show
+            function checkUrlFragment() {
+                const hash = window.location.hash;
+                console.log('URL Fragment:', hash); // Debug log
+                if (hash === '#bluepage') {
+                    showPage(bluePage);
+                } else {
+                    // Default to black page
+                    showPage(blackPage);
+                }
+            }
+            
             // Navigation functions
             function showPage(page) {
                 // Hide all pages
@@ -612,43 +624,20 @@
             startBtn.addEventListener('click', () => showPage(bluePage));
             redAppBtn.addEventListener('click', () => showPage(redPage));
             greenAppBtn.addEventListener('click', () => showPage(greenPage));
-            
-	// Replace the current yellow button event listener with this:
-	yellowAppBtn.addEventListener('click', () => {
-	    window.location.href = 'calculator.html#yellowpage';
-	});
-	
-	// And add this function to handle URL fragments:
-	function checkUrlFragment() {
-   	 const hash = window.location.hash;
-   	 if (hash === '#bluepage') {
-   	     showPage(bluePage);
-   	 } else {
-    	    // Default to black page
-    	    showPage(blackPage);
-   	 }
-	}
-
-// Call this on page load and add hashchange listener
-document.addEventListener('DOMContentLoaded', function() {
-    // ... existing code ...
-    
-    checkUrlFragment();
-    window.addEventListener('hashchange', checkUrlFragment);
-});
-
-// Call this on page load and add hashchange listener
-document.addEventListener('DOMContentLoaded', function() {
-    // ... existing code ...
-    
-    checkUrlFragment();
-    window.addEventListener('hashchange', checkUrlFragment);
-});
+            yellowAppBtn.addEventListener('click', () => {
+                window.location.href = 'calculator.html#yellowpage';
+            });
             
             // Back buttons return to blue page
             backButtons.forEach(button => {
                 button.addEventListener('click', () => showPage(bluePage));
             });
+            
+            // Check URL fragment on page load
+            checkUrlFragment();
+            
+            // Also check when URL fragment changes
+            window.addEventListener('hashchange', checkUrlFragment);
             
             // Tic Tac Toe Game Logic
             const gameSetup = document.getElementById('game-setup');
