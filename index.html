@@ -155,6 +155,15 @@
             background-color: #29b6f6;
         }
 
+        .btn-yellow {
+            background-color: #ffeb3b;
+            color: #000;
+        }
+
+        .btn-yellow:hover {
+            background-color: #fff176;
+        }
+
         /* Button Container for Blue Page */
         .button-container {
             display: flex;
@@ -290,8 +299,8 @@
 
         .wheel-container {
             position: relative;
-            width: 300px;
-            height: 300px;
+            width: 350px;
+            height: 350px;
         }
 
         #roulette-wheel {
@@ -300,9 +309,33 @@
             border-radius: 50%;
             position: relative;
             overflow: hidden;
-            border: 5px solid #8B4513;
+            border: 8px solid #8B4513;
             background: #8B4513;
-            transition: transform 3s cubic-bezier(0.2, 0.8, 0.3, 1);
+            transition: transform 1.5s cubic-bezier(0.1, 0.8, 0.2, 1);
+            box-shadow: 0 0 20px rgba(0,0,0,0.5);
+        }
+
+        .wheel-peg-container {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            border-radius: 50%;
+            z-index: 15;
+            pointer-events: none;
+        }
+
+        .wheel-peg {
+            position: absolute;
+            width: 16px;
+            height: 16px;
+            background: #5D4037;
+            border-radius: 50%;
+            transform: translate(-50%, -50%);
+            border: 2px solid #3E2723;
+            box-shadow: 0 0 4px rgba(0,0,0,0.7);
+            z-index: 20;
         }
 
         .wheel-segment {
@@ -311,23 +344,41 @@
             height: 50%;
             transform-origin: 100% 100%;
             display: flex;
-            align-items: center;
+            align-items: flex-start;
             justify-content: center;
             font-weight: bold;
             color: white;
-            text-shadow: 1px 1px 1px rgba(0,0,0,0.5);
+            text-shadow: 1px 1px 2px rgba(0,0,0,0.8);
+            z-index: 5;
+            padding-top: 30px;
+            font-size: 16px;
+            font-weight: bold;
         }
 
         .segment-red {
-            background-color: #d32f2f;
+            background: linear-gradient(135deg, #d32f2f, #b71c1c);
         }
 
         .segment-black {
-            background-color: #000;
+            background: linear-gradient(135deg, #2d3436, #000);
         }
 
         .segment-green {
-            background-color: #0a0;
+            background: linear-gradient(135deg, #0a0, #008000);
+        }
+
+        .wheel-pointer {
+            position: absolute;
+            top: -20px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 0;
+            height: 0;
+            border-left: 15px solid transparent;
+            border-right: 15px solid transparent;
+            border-top: 25px solid #000;
+            z-index: 25;
+            filter: drop-shadow(0 2px 4px rgba(0,0,0,0.5));
         }
 
         #spin-button {
@@ -343,10 +394,13 @@
             transform: translate(-50%, -50%);
             font-size: 2rem;
             font-weight: bold;
-            background: rgba(255, 255, 255, 0.9);
-            padding: 10px 20px;
-            border-radius: 10px;
+            background: rgba(255, 255, 255, 0.95);
+            padding: 15px 25px;
+            border-radius: 15px;
             display: none;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+            z-index: 15;
+            border: 3px solid #8B4513;
         }
 
         .betting-table {
@@ -354,6 +408,7 @@
             width: 100%;
             max-width: 600px;
             border: 2px solid #333;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.2);
         }
 
         .zero-column {
@@ -393,6 +448,7 @@
             font-weight: bold;
             font-size: 1.1rem;
             cursor: default;
+            transition: all 0.2s;
         }
 
         .number-red {
@@ -406,9 +462,10 @@
         }
 
         .highlighted {
-            box-shadow: 0 0 0 3px yellow;
+            box-shadow: 0 0 0 3px #FFD700, 0 0 20px #FFD700;
             z-index: 10;
             position: relative;
+            transform: scale(1.05);
         }
     </style>
 </head>
@@ -432,6 +489,7 @@
             <div class="button-container">
                 <button id="red-app-btn" class="btn btn-red">Tic Tac Toe</button>
                 <button id="green-app-btn" class="btn btn-green">Roulette</button>
+                <button id="yellow-app-btn" class="btn btn-yellow">Calculator</button>
             </div>
         </div>
 
@@ -484,7 +542,13 @@
                 <h2 id="roulette-title">Double-Zero Roulette</h2>
                 <div class="roulette-content">
                     <div class="wheel-container">
-                        <div id="roulette-wheel"></div>
+                        <div class="wheel-pointer"></div>
+                        <div id="roulette-wheel">
+                            <!-- Segments will be generated by JavaScript -->
+                        </div>
+                        <div class="wheel-peg-container">
+                            <!-- Pegs will be generated by JavaScript -->
+                        </div>
                         <div id="result-display"></div>
                     </div>
                     <button id="spin-button" class="btn btn-green">SPIN</button>
@@ -518,6 +582,7 @@
             const startBtn = document.getElementById('start-btn');
             const redAppBtn = document.getElementById('red-app-btn');
             const greenAppBtn = document.getElementById('green-app-btn');
+            const yellowAppBtn = document.getElementById('yellow-app-btn');
             const backButtons = document.querySelectorAll('.back-button');
             
             // Navigation functions
@@ -548,12 +613,44 @@
             redAppBtn.addEventListener('click', () => showPage(redPage));
             greenAppBtn.addEventListener('click', () => showPage(greenPage));
             
+	// Replace the current yellow button event listener with this:
+	yellowAppBtn.addEventListener('click', () => {
+	    window.location.href = 'calculator.html#yellowpage';
+	});
+	
+	// And add this function to handle URL fragments:
+	function checkUrlFragment() {
+   	 const hash = window.location.hash;
+   	 if (hash === '#bluepage') {
+   	     showPage(bluePage);
+   	 } else {
+    	    // Default to black page
+    	    showPage(blackPage);
+   	 }
+	}
+
+// Call this on page load and add hashchange listener
+document.addEventListener('DOMContentLoaded', function() {
+    // ... existing code ...
+    
+    checkUrlFragment();
+    window.addEventListener('hashchange', checkUrlFragment);
+});
+
+// Call this on page load and add hashchange listener
+document.addEventListener('DOMContentLoaded', function() {
+    // ... existing code ...
+    
+    checkUrlFragment();
+    window.addEventListener('hashchange', checkUrlFragment);
+});
+            
             // Back buttons return to blue page
             backButtons.forEach(button => {
                 button.addEventListener('click', () => showPage(bluePage));
             });
             
-            // Tic Tac Toe Game Logic (unchanged)
+            // Tic Tac Toe Game Logic
             const gameSetup = document.getElementById('game-setup');
             const modeSelection = document.getElementById('mode-selection');
             const gameBoard = document.getElementById('game-board');
@@ -728,6 +825,7 @@
             const spinButton = document.getElementById('spin-button');
             const resultDisplay = document.getElementById('result-display');
             const numbersGrid = document.getElementById('numbers-grid');
+            const pegContainer = document.querySelector('.wheel-peg-container');
             
             // Standard American Roulette layout with correct colors
             const rouletteNumbers = [
@@ -749,15 +847,13 @@
             
             // Standard roulette table order (3 columns, 12 rows)
             const rouletteTableOrder = [
-                // Column 1: 3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 33, 36
                 3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 33, 36,
-                // Column 2: 2, 5, 8, 11, 14, 17, 20, 23, 26, 29, 32, 35
                 2, 5, 8, 11, 14, 17, 20, 23, 26, 29, 32, 35,
-                // Column 3: 1, 4, 7, 10, 13, 16, 19, 22, 25, 28, 31, 34
                 1, 4, 7, 10, 13, 16, 19, 22, 25, 28, 31, 34
             ];
             
             let isSpinning = false;
+            let currentRotation = 0;
             
             // Initialize roulette wheel and table
             function initializeRoulette() {
@@ -767,6 +863,8 @@
             
             function createWheel() {
                 rouletteWheel.innerHTML = '';
+                pegContainer.innerHTML = '';
+                
                 const totalSegments = 38;
                 const degreesPerSegment = 360 / totalSegments;
                 
@@ -776,6 +874,7 @@
                     '00', '27', '10', '25', '29', '12', '8', '19', '31', '18', '6', '21', '33', '16', '4', '23', '35', '14', '2'
                 ];
                 
+                // Create segments with numbers
                 for (let i = 0; i < totalSegments; i++) {
                     const segment = document.createElement('div');
                     segment.className = 'wheel-segment';
@@ -794,6 +893,20 @@
                     segment.textContent = number;
                     segment.style.transform = `rotate(${i * degreesPerSegment}deg) skewY(${90 - degreesPerSegment}deg)`;
                     rouletteWheel.appendChild(segment);
+                }
+                
+                // Create pegs in the separate container
+                for (let i = 0; i < totalSegments; i++) {
+                    const peg = document.createElement('div');
+                    peg.className = 'wheel-peg';
+                    const angle = i * degreesPerSegment;
+                    // Position pegs exactly on the perimeter
+                    const radius = 50; // Exactly at the edge
+                    const x = 50 + radius * Math.cos((angle - 90) * Math.PI / 180);
+                    const y = 50 + radius * Math.sin((angle - 90) * Math.PI / 180);
+                    peg.style.left = `${x}%`;
+                    peg.style.top = `${y}%`;
+                    pegContainer.appendChild(peg);
                 }
             }
             
@@ -829,7 +942,9 @@
                 
                 isSpinning = false;
                 spinButton.disabled = false;
+                currentRotation = 0;
                 rouletteWheel.style.transform = 'rotate(0deg)';
+                pegContainer.style.transform = 'rotate(0deg)';
             }
             
             spinButton.addEventListener('click', function() {
@@ -844,12 +959,27 @@
                     cell.classList.remove('highlighted');
                 });
                 
-                // Spin animation
-                const spinDuration = 3000;
+                // Generate random result first
+                const targetNumber = Math.floor(Math.random() * 38);
+                const wheelOrder = [
+                    '0', '28', '9', '26', '30', '11', '7', '20', '32', '17', '5', '22', '34', '15', '3', '24', '36', '13', '1',
+                    '00', '27', '10', '25', '29', '12', '8', '19', '31', '18', '6', '21', '33', '16', '4', '23', '35', '14', '2'
+                ];
+                
+                const resultNumber = wheelOrder[targetNumber];
+                const segmentSize = 360 / 38;
+                
+                // Calculate the final rotation to position the winning number at the pointer
+                const targetSegmentCenter = (targetNumber * segmentSize) + (segmentSize / 2);
+                const rotationToPointer = 360 - targetSegmentCenter;
+                
+                // Add multiple full rotations for spinning effect
+                const fullRotations = 8;
+                const targetRotation = currentRotation + fullRotations * 360 + rotationToPointer;
+                
+                const spinDuration = 1500;
                 const startTime = Date.now();
-                const startRotation = parseInt(rouletteWheel.style.transform.replace('rotate(', '').replace('deg)', '')) || 0;
-                const randomSpins = 5 + Math.random() * 3;
-                const targetRotation = startRotation + 360 * randomSpins + Math.random() * 360;
+                const startRotation = currentRotation;
                 
                 function animateSpin() {
                     const currentTime = Date.now();
@@ -857,33 +987,21 @@
                     const progress = Math.min(elapsed / spinDuration, 1);
                     
                     const easeOut = 1 - Math.pow(1 - progress, 3);
-                    const currentRotation = startRotation + (targetRotation - startRotation) * easeOut;
+                    currentRotation = startRotation + (targetRotation - startRotation) * easeOut;
                     
                     rouletteWheel.style.transform = `rotate(${currentRotation}deg)`;
+                    pegContainer.style.transform = `rotate(${currentRotation}deg)`;
                     
                     if (progress < 1) {
                         requestAnimationFrame(animateSpin);
                     } else {
-                        // Spin complete - determine result
-                        const normalizedRotation = (targetRotation % 360 + 360) % 360;
-                        const segmentSize = 360 / 38;
-                        const winningSegment = Math.floor(normalizedRotation / segmentSize);
+                        currentRotation = currentRotation % 360;
                         
-                        // American roulette wheel order
-                        const wheelOrder = [
-                            '0', '28', '9', '26', '30', '11', '7', '20', '32', '17', '5', '22', '34', '15', '3', '24', '36', '13', '1',
-                            '00', '27', '10', '25', '29', '12', '8', '19', '31', '18', '6', '21', '33', '16', '4', '23', '35', '14', '2'
-                        ];
-                        
-                        const resultNumber = wheelOrder[winningSegment];
-                        
-                        // Display result
                         const resultData = rouletteNumbers.find(item => item.number === resultNumber);
                         resultDisplay.textContent = resultNumber;
                         resultDisplay.style.color = resultData.color === 'green' ? '#0a0' : resultData.color === 'red' ? '#d32f2f' : '#000';
                         resultDisplay.style.display = 'block';
                         
-                        // Highlight the winning number on the table
                         const winningCell = document.querySelector(`[data-number="${resultNumber}"]`);
                         if (winningCell) {
                             winningCell.classList.add('highlighted');
