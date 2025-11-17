@@ -331,59 +331,60 @@
 
     <script>
         // Page navigation logic
-        document.addEventListener('DOMContentLoaded', function() {
-            // Get all page elements
-            const blackPage = document.getElementById('black-page');
-            const whitePage = document.getElementById('white-page');
-            const bluePage = document.getElementById('blue-page');
-            const redPage = document.getElementById('red-page');
-            
-            // Navigation buttons
-            const enterBtn = document.getElementById('enter-btn');
-            const startBtn = document.getElementById('start-btn');
-            const redAppBtn = document.getElementById('red-app-btn');
-            
-            // Check URL fragment to determine which page to show
-            function checkUrlFragment() {
-                const hash = window.location.hash;
-                if (hash === '#bluepage') {
-                    showPage(bluePage);
-                } else if (hash === '#redpage') {
-                    showPage(redPage);
-                } else {
-                    // Default to black page
-                    showPage(blackPage);
-                }
+    document.addEventListener('DOMContentLoaded', function() {
+        // Get all page elements
+        const blackPage = document.getElementById('black-page');
+        const whitePage = document.getElementById('white-page');
+        const bluePage = document.getElementById('blue-page');
+        const redPage = document.getElementById('red-page');
+        
+        // Navigation buttons
+        const enterBtn = document.getElementById('enter-btn');
+        const startBtn = document.getElementById('start-btn');
+        const redAppBtn = document.getElementById('red-app-btn');
+        
+        // Check URL fragment to determine which page to show
+        function checkUrlFragment() {
+            const hash = window.location.hash;
+            if (hash === '#bluepage') {
+                showPage(bluePage);
+            } else if (hash === '#redpage') {
+                showPage(redPage);
+            } else {
+                // Default to black page
+                showPage(blackPage);
             }
-            
-            // Navigation functions
-            function showPage(page) {
-                // Hide all pages
-                blackPage.style.display = 'none';
-                whitePage.style.display = 'none';
-                bluePage.style.display = 'none';
-                redPage.style.display = 'none';
-                
-                // Show the requested page
-                page.style.display = 'flex';
-            }
-            
-            // Set up event listeners for navigation
-            enterBtn.addEventListener('click', () => showPage(whitePage));
-            startBtn.addEventListener('click', () => showPage(bluePage));
-            redAppBtn.addEventListener('click', () => showPage(redPage));
-            
-            // Check URL fragment on page load
-            checkUrlFragment();
-            
-            // Also check when URL fragment changes
-            window.addEventListener('hashchange', checkUrlFragment);
-        });
-
-        // Function to go back to index.html on blue page
-        function goBackToIndex() {
-            window.location.href = 'index.html#bluepage';
         }
+        
+        // Navigation functions
+        function showPage(page) {
+            // Hide all pages
+            blackPage.style.display = 'none';
+            whitePage.style.display = 'none';
+            bluePage.style.display = 'none';
+            redPage.style.display = 'none';
+            
+            // Show the requested page
+            page.style.display = 'flex';
+        }
+        
+        // Set up event listeners for navigation
+        enterBtn.addEventListener('click', () => showPage(whitePage));
+        startBtn.addEventListener('click', () => showPage(bluePage));
+        redAppBtn.addEventListener('click', () => showPage(redPage));
+        
+        // Check URL fragment on page load
+        checkUrlFragment();
+        
+        // Also check when URL fragment changes
+        window.addEventListener('hashchange', checkUrlFragment);
+    });
+
+    // Function to go back to index.html on blue page
+    function goBackToIndex() {
+        window.location.href = 'index.html#bluepage';
+    }
+
 
         // Tic Tac Toe Game Logic
         const gameSetup = document.getElementById('game-setup');
