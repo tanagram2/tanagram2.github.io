@@ -194,7 +194,7 @@
             background-color: white;
             border: 3px solid black;
             border-radius: 10px;
-            padding: 30px;
+            padding: 20px;
             width: 95%;
             max-width: 800px;
             display: flex;
@@ -205,7 +205,7 @@
 
         #dotgame-title {
             font-size: 2rem;
-            margin-bottom: 20px;
+            margin-bottom: 15px;
         }
 
         #game-setup, #game-board, #game-result, #mode-selection {
@@ -224,14 +224,14 @@
             display: flex;
             justify-content: space-between;
             width: 100%;
-            max-width: 600px;
-            margin-bottom: 20px;
-            font-size: 1.2rem;
+            max-width: 500px;
+            margin-bottom: 15px;
+            font-size: 1.1rem;
             font-weight: bold;
         }
 
         .player-score {
-            padding: 10px 20px;
+            padding: 8px 16px;
             border-radius: 5px;
             text-align: center;
         }
@@ -249,24 +249,25 @@
         }
 
         #game-status {
-            font-size: 1.2rem;
+            font-size: 1.1rem;
             margin: 10px 0;
-            height: 30px;
+            height: 25px;
             font-weight: bold;
         }
 
         .dot-board {
             position: relative;
-            width: 600px;
-            height: 600px;
+            width: 90vmin;
+            height: 90vmin;
+            max-width: 500px;
+            max-height: 500px;
             background-color: white;
-            border: 2px solid #333;
         }
 
         .dot {
             position: absolute;
-            width: 12px;
-            height: 12px;
+            width: 10px;
+            height: 10px;
             background-color: #000;
             border-radius: 50%;
             transform: translate(-50%, -50%);
@@ -479,9 +480,17 @@
         const scoreMessage = document.getElementById('score-message');
         const boardElement = document.getElementById('board');
 
-        const GRID_SIZE = 13;
-        const DOT_SPACING = 50;
-        const BOARD_SIZE = 600;
+        // Game configuration - easily modifiable
+        const CONFIG = {
+            GRID_SIZE: 11,           // 11x11 dots = 10x10 squares
+            MIN_DOT_SPACING: 35,     // Minimum pixels between dots
+            MAX_BOARD_SIZE: 500,     // Maximum board size in pixels
+            WINNING_SCORE_RATIO: 0.5 // Win when player has more than 50% of total squares
+        };
+
+        // Calculate total squares and winning score
+        const TOTAL_SQUARES = (CONFIG.GRID_SIZE - 1) * (CONFIG.GRID_SIZE - 1);
+        const WINNING_SCORE = Math.floor(TOTAL_SQUARES * CONFIG.WINNING_SCORE_RATIO) + 1;
 
         let gameMode = '';
         let gameActive = false;
@@ -493,6 +502,7 @@
         let squares = {};
         let availableMoves = [];
         let isComputerTurn = false;
+        let dotSpacing = CONFIG.MIN_DOT_SPACING;
 
         function resetDotGame() {
             gameSetup.style.display = 'flex';
@@ -533,19 +543,34 @@
             }
         }
 
+        function calculateDotSpacing() {
+            const boardWidth = boardElement.clientWidth;
+            const boardHeight = boardElement.clientHeight;
+            
+            // Calculate spacing based on available space
+            const horizontalSpacing = boardWidth / (CONFIG.GRID_SIZE - 1);
+            const verticalSpacing = boardHeight / (CONFIG.GRID_SIZE - 1);
+            
+            // Use the smaller spacing to ensure everything fits, but respect minimum
+            return Math.max(CONFIG.MIN_DOT_SPACING, Math.min(horizontalSpacing, verticalSpacing));
+        }
+
         function initializeBoard() {
             boardElement.innerHTML = '';
             
+            // Calculate dynamic dot spacing based on current board size
+            dotSpacing = calculateDotSpacing();
+            
             // Create dots
-            for (let row = 0; row < GRID_SIZE; row++) {
-                for (let col = 0; col < GRID_SIZE; col++) {
+            for (let row = 0; row < CONFIG.GRID_SIZE; row++) {
+                for (let col = 0; col < CONFIG.GRID_SIZE; col++) {
                     const dot = document.createElement('div');
                     dot.className = 'dot';
                     dot.dataset.row = row;
                     dot.dataset.col = col;
                     
-                    const x = col * DOT_SPACING;
-                    const y = row * DOT_SPACING;
+                    const x = col * dotSpacing;
+                    const y = row * dotSpacing;
                     
                     dot.style.left = `${x}px`;
                     dot.style.top = `${y}px`;
@@ -561,10 +586,10 @@
         function updateAvailableMoves() {
             availableMoves = [];
             
-            for (let row = 0; row < GRID_SIZE; row++) {
-                for (let col = 0; col < GRID_SIZE; col++) {
+            for (let row = 0; row < CONFIG.GRID_SIZE; row++) {
+                for (let col = 0; col < CONFIG.GRID_SIZE; col++) {
                     // Check right connection
-                    if (col < GRID_SIZE - 1) {
+                    if (col < CONFIG.GRID_SIZE - 1) {
                         const lineId = getLineId(row, col, row, col + 1);
                         if (!lines[lineId]) {
                             availableMoves.push({
@@ -575,7 +600,7 @@
                     }
                     
                     // Check down connection
-                    if (row < GRID_SIZE - 1) {
+                    if (row < CONFIG.GRID_SIZE - 1) {
                         const lineId = getLineId(row, col, row + 1, col);
                         if (!lines[lineId]) {
                             availableMoves.push({
@@ -685,7 +710,8 @@
             
             updateAvailableMoves();
             
-            if (availableMoves.length === 0 || redScore > 72 || blueScore > 72) {
+            // Use dynamic winning score calculation
+            if (availableMoves.length === 0 || redScore > WINNING_SCORE || blueScore > WINNING_SCORE) {
                 endGame();
                 return;
             }
@@ -712,10 +738,11 @@
             const line = document.createElement('div');
             line.className = `line ${player}`;
             
-            const x1 = col1 * DOT_SPACING;
-            const y1 = row1 * DOT_SPACING;
-            const x2 = col2 * DOT_SPACING;
-            const y2 = row2 * DOT_SPACING;
+            // Calculate exact center positions for perfect alignment
+            const x1 = col1 * dotSpacing;
+            const y1 = row1 * dotSpacing;
+            const x2 = col2 * dotSpacing;
+            const y2 = row2 * dotSpacing;
             
             const length = Math.sqrt(Math.pow(x2 - x1, 2) + Math.pow(y2 - y1, 2));
             const angle = Math.atan2(y2 - y1, x2 - x1) * 180 / Math.PI;
@@ -725,7 +752,7 @@
             line.style.left = `${x1}px`;
             line.style.top = `${y1}px`;
             line.style.transform = `rotate(${angle}deg)`;
-            line.style.transformOrigin = '0 2px';
+            line.style.transformOrigin = '0 2px'; // Perfect vertical centering
             
             boardElement.appendChild(line);
         }
@@ -734,8 +761,8 @@
             const completed = [];
             
             // Check all potential 1x1 squares
-            for (let row = 0; row < GRID_SIZE - 1; row++) {
-                for (let col = 0; col < GRID_SIZE - 1; col++) {
+            for (let row = 0; row < CONFIG.GRID_SIZE - 1; row++) {
+                for (let col = 0; col < CONFIG.GRID_SIZE - 1; col++) {
                     const squareId = `${row}-${col}`;
                     
                     // Skip if already filled
@@ -763,12 +790,11 @@
             const square = document.createElement('div');
             square.className = `square ${player}`;
             
-            // Fill the entire square
-            const size = DOT_SPACING;
-            square.style.width = `${size}px`;
-            square.style.height = `${size}px`;
-            square.style.left = `${col * DOT_SPACING}px`;
-            square.style.top = `${row * DOT_SPACING}px`;
+            // Fill the entire square using dynamic spacing
+            square.style.width = `${dotSpacing}px`;
+            square.style.height = `${dotSpacing}px`;
+            square.style.left = `${col * dotSpacing}px`;
+            square.style.top = `${row * dotSpacing}px`;
             
             boardElement.appendChild(square);
         }
@@ -776,7 +802,134 @@
         function makeComputerMove() {
             if (!gameActive) return;
             
-            // Computer makes completely random moves
+            // First, check for moves that would complete a square (good moves)
+            const completingMoves = [];
+            
+            // Then, check for moves that create 3-sided squares (bad moves)
+            const badMoves = [];
+            
+            // And moves that don't create 3-sided squares (safe moves)
+            const safeMoves = [];
+            
+            for (const move of availableMoves) {
+                // Temporarily add this line to check its effects
+                const tempLines = { ...lines };
+                const lineId = getLineId(move.dot1.row, move.dot1.col, move.dot2.row, move.dot2.col);
+                tempLines[lineId] = 'blue';
+                
+                let completesSquare = false;
+                let createsThreeSidedSquare = false;
+                
+                // Check adjacent squares for completion
+                if (move.dot1.row === move.dot2.row) {
+                    // Horizontal line
+                    const row = move.dot1.row;
+                    const col = Math.min(move.dot1.col, move.dot2.col);
+                    
+                    // Check square above
+                    if (row > 0) {
+                        const topLine = getLineId(row-1, col, row, col);
+                        const rightLine = getLineId(row, col, row, col+1);
+                        const topRightLine = getLineId(row-1, col, row-1, col+1);
+                        
+                        if (tempLines[topLine] && tempLines[rightLine] && tempLines[topRightLine]) {
+                            if (!squares[`${row-1}-${col}`]) {
+                                completesSquare = true;
+                            }
+                        } else if ((tempLines[topLine] ? 1 : 0) + (tempLines[rightLine] ? 1 : 0) + (tempLines[topRightLine] ? 1 : 0) === 3) {
+                            createsThreeSidedSquare = true;
+                        }
+                    }
+                    
+                    // Check square below
+                    if (row < CONFIG.GRID_SIZE - 1) {
+                        const bottomLine = getLineId(row, col, row+1, col);
+                        const rightLine = getLineId(row, col, row, col+1);
+                        const bottomRightLine = getLineId(row, col+1, row+1, col+1);
+                        
+                        if (tempLines[bottomLine] && tempLines[rightLine] && tempLines[bottomRightLine]) {
+                            if (!squares[`${row}-${col}`]) {
+                                completesSquare = true;
+                            }
+                        } else if ((tempLines[bottomLine] ? 1 : 0) + (tempLines[rightLine] ? 1 : 0) + (tempLines[bottomRightLine] ? 1 : 0) === 3) {
+                            createsThreeSidedSquare = true;
+                        }
+                    }
+                } else {
+                    // Vertical line
+                    const col = move.dot1.col;
+                    const row = Math.min(move.dot1.row, move.dot2.row);
+                    
+                    // Check square to the left
+                    if (col > 0) {
+                        const leftLine = getLineId(row, col-1, row, col);
+                        const bottomLine = getLineId(row, col, row+1, col);
+                        const bottomLeftLine = getLineId(row, col-1, row+1, col-1);
+                        
+                        if (tempLines[leftLine] && tempLines[bottomLine] && tempLines[bottomLeftLine]) {
+                            if (!squares[`${row}-${col-1}`]) {
+                                completesSquare = true;
+                            }
+                        } else if ((tempLines[leftLine] ? 1 : 0) + (tempLines[bottomLine] ? 1 : 0) + (tempLines[bottomLeftLine] ? 1 : 0) === 3) {
+                            createsThreeSidedSquare = true;
+                        }
+                    }
+                    
+                    // Check square to the right
+                    if (col < CONFIG.GRID_SIZE - 1) {
+                        const rightLine = getLineId(row, col, row, col+1);
+                        const bottomLine = getLineId(row, col, row+1, col);
+                        const bottomRightLine = getLineId(row, col+1, row+1, col+1);
+                        
+                        if (tempLines[rightLine] && tempLines[bottomLine] && tempLines[bottomRightLine]) {
+                            if (!squares[`${row}-${col}`]) {
+                                completesSquare = true;
+                            }
+                        } else if ((tempLines[rightLine] ? 1 : 0) + (tempLines[bottomLine] ? 1 : 0) + (tempLines[bottomRightLine] ? 1 : 0) === 3) {
+                            createsThreeSidedSquare = true;
+                        }
+                    }
+                }
+                
+                if (completesSquare) {
+                    completingMoves.push(move);
+                } else if (createsThreeSidedSquare) {
+                    badMoves.push(move);
+                } else {
+                    safeMoves.push(move);
+                }
+            }
+            
+            // Strategy: 
+            // 1. First priority: moves that complete squares
+            // 2. Second priority: safe moves (don't create 3-sided squares)
+            // 3. Last resort: bad moves (create 3-sided squares)
+            
+            if (completingMoves.length > 0) {
+                // Make a move that completes a square
+                const randomIndex = Math.floor(Math.random() * completingMoves.length);
+                const move = completingMoves[randomIndex];
+                makeComputerLine(move.dot1.row, move.dot1.col, move.dot2.row, move.dot2.col);
+                return;
+            }
+            
+            if (safeMoves.length > 0) {
+                // Make a safe move (doesn't create 3-sided squares)
+                const randomIndex = Math.floor(Math.random() * safeMoves.length);
+                const move = safeMoves[randomIndex];
+                makeComputerLine(move.dot1.row, move.dot1.col, move.dot2.row, move.dot2.col);
+                return;
+            }
+            
+            if (badMoves.length > 0) {
+                // Only make a bad move if no other options exist
+                const randomIndex = Math.floor(Math.random() * badMoves.length);
+                const move = badMoves[randomIndex];
+                makeComputerLine(move.dot1.row, move.dot1.col, move.dot2.row, move.dot2.col);
+                return;
+            }
+            
+            // Fallback: make a random move (shouldn't happen since we check availableMoves)
             if (availableMoves.length > 0) {
                 const randomIndex = Math.floor(Math.random() * availableMoves.length);
                 const move = availableMoves[randomIndex];
@@ -803,7 +956,7 @@
             }
             
             winnerMessage.textContent = winner;
-            scoreMessage.textContent = `Final Score - Red: ${redScore}, Blue: ${blueScore}`;
+            scoreMessage.textContent = `Final Score - Red: ${redScore}, Blue: ${blueScore} (of ${TOTAL_SQUARES} total squares)`;
             gameBoard.style.display = 'none';
             gameResult.style.display = 'flex';
         }
@@ -848,6 +1001,35 @@
         
         goBackBtn.addEventListener('click', function() {
             resetDotGame();
+        });
+
+        // Handle window resize for responsive scaling
+        window.addEventListener('resize', function() {
+            if (gameActive) {
+                // Recalculate dot spacing and redraw the board
+                const oldDotSpacing = dotSpacing;
+                dotSpacing = calculateDotSpacing();
+                
+                if (Math.abs(oldDotSpacing - dotSpacing) > 1) {
+                    // Only redraw if spacing changed significantly
+                    const currentState = { lines, squares, availableMoves };
+                    initializeBoard();
+                    // Restore game state
+                    lines = currentState.lines;
+                    squares = currentState.squares;
+                    availableMoves = currentState.availableMoves;
+                    
+                    // Redraw all lines and squares
+                    for (const lineId in lines) {
+                        const [row1, col1, row2, col2] = lineId.split('-').map(Number);
+                        drawLine(row1, col1, row2, col2, lines[lineId]);
+                    }
+                    
+                    for (const squareId in squares) {
+                        fillSquare(squareId, squares[squareId]);
+                    }
+                }
+            }
         });
     </script>
 </body>
