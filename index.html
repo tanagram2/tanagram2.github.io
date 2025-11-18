@@ -130,6 +130,15 @@
             background-color: #fff176;
         }
 
+        .btn-purple {
+            background-color: #6a1b9a;
+            color: #fff;
+        }
+
+        .btn-purple:hover {
+            background-color: #8e24aa;
+        }
+
         .btn-black {
             background-color: #000;
             color: #fff;
@@ -168,6 +177,7 @@
                 <button id="tictactoe-app-btn" class="btn btn-red">Tic Tac Toe</button>
                 <button id="roulette-app-btn" class="btn btn-green">Roulette</button>
                 <button id="calculator-app-btn" class="btn btn-yellow">Calculator</button>
+                <button id="dotgame-app-btn" class="btn btn-purple">Dot Game</button>
             </div>
         </div>
     </div>
@@ -185,6 +195,7 @@
             const tictactoeAppBtn = document.getElementById('tictactoe-app-btn');
             const rouletteAppBtn = document.getElementById('roulette-app-btn');
             const calculatorAppBtn = document.getElementById('calculator-app-btn');
+            const dotgameAppBtn = document.getElementById('dotgame-app-btn');
             
             // Check URL fragment to determine which page to show
             function checkUrlFragment() {
@@ -219,6 +230,9 @@
             });
             calculatorAppBtn.addEventListener('click', () => {
                 window.location.href = 'calculator.html#yellowpage';
+            });
+            dotgameAppBtn.addEventListener('click', () => {
+                window.location.href = 'dotgame.html#purplepage';
             });
             
             // Check URL fragment on page load
