@@ -516,8 +516,8 @@
                     
                     <!-- Navigation Triangles -->
                     <div class="nav-triangles">
-                        <button id="back-triangle" class="nav-triangle triangle-left inactive" disabled></button>
-                        <button id="forward-triangle" class="nav-triangle triangle-right inactive" disabled></button>
+                        <button id="back-arrow" class="nav-triangle triangle-left inactive" disabled></button>
+                        <button id="forward-arrow" class="nav-triangle triangle-right inactive" disabled></button>
                     </div>
                 </div>
                 
@@ -571,7 +571,7 @@
                     <button class="icon-button icon-grey"></button>
                     <span class="app-name">Placeholder 1</span>
                 </div>
-                <!-- ... (all placeholder icons 2-100 remain the same) ... -->
+                <!-- ... (all placeholder icons 2-100) ... -->
                 <div class="app-icon">
                     <button class="icon-button icon-grey"></button>
                     <span class="app-name">Placeholder 100</span>
@@ -598,8 +598,8 @@
             const shutdownBtn = document.getElementById('shutdown-btn');
             
             // Navigation triangles
-            const backTriangle = document.getElementById('back-triangle');
-            const forwardTriangle = document.getElementById('forward-triangle');
+            const backArrow = document.getElementById('back-arrow');
+            const forwardArrow = document.getElementById('forward-arrow');
             
             // App icons
             const tictactoeAppIcon = document.getElementById('tictactoe-app-icon');
@@ -610,74 +610,46 @@
             // Clock element
             const clockElement = document.getElementById('clock');
             
-            // Navigation history
-            let navigationHistory = {
-                previousApp: null,
-                currentApp: null
-            };
+            // Simple navigation history - just remember the last app
+            let lastOpenedApp = null;
             
-            // Function to update navigation triangles
-            function updateNavigationTriangles() {
-                // Back triangle: active if we're in an app
-                if (navigationHistory.currentApp) {
-                    backTriangle.classList.remove('inactive');
-                    backTriangle.classList.add('active');
-                    backTriangle.disabled = false;
-                } else {
-                    backTriangle.classList.remove('active');
-                    backTriangle.classList.add('inactive');
-                    backTriangle.disabled = true;
-                }
+            // Function to update navigation arrows
+            function updateNavigationArrows() {
+                // Back arrow: always inactive on desktop
+                backArrow.classList.remove('active');
+                backArrow.classList.add('inactive');
+                backArrow.disabled = true;
                 
-                // Forward triangle: active if we were in an app and went back to desktop
-                if (navigationHistory.previousApp && !navigationHistory.currentApp) {
-                    forwardTriangle.classList.remove('inactive');
-                    forwardTriangle.classList.add('active');
-                    forwardTriangle.disabled = false;
+                // Forward arrow: active if we have a last opened app
+                if (lastOpenedApp) {
+                    forwardArrow.classList.remove('inactive');
+                    forwardArrow.classList.add('active');
+                    forwardArrow.disabled = false;
                 } else {
-                    forwardTriangle.classList.remove('active');
-                    forwardTriangle.classList.add('inactive');
-                    forwardTriangle.disabled = true;
+                    forwardArrow.classList.remove('active');
+                    forwardArrow.classList.add('inactive');
+                    forwardArrow.disabled = true;
                 }
             }
             
             // Function to navigate to an app
             function navigateToApp(appUrl, appName) {
-                navigationHistory.previousApp = navigationHistory.currentApp;
-                navigationHistory.currentApp = { url: appUrl, name: appName };
-                updateNavigationTriangles();
+                lastOpenedApp = { url: appUrl, name: appName };
+                updateNavigationArrows();
                 window.location.href = appUrl;
             }
             
-            // Function to go back to desktop
-            function goBackToDesktop() {
-                if (navigationHistory.currentApp) {
-                    navigationHistory.previousApp = navigationHistory.currentApp;
-                    navigationHistory.currentApp = null;
-                    updateNavigationTriangles();
-                    showPage(bluePage);
-                    window.location.hash = 'bluepage';
-                }
-            }
-            
-            // Function to go forward to previous app
-            function goForwardToApp() {
-                if (navigationHistory.previousApp && !navigationHistory.currentApp) {
-                    const previousApp = navigationHistory.previousApp;
-                    navigationHistory.currentApp = previousApp;
-                    navigationHistory.previousApp = null;
-                    updateNavigationTriangles();
-                    window.location.href = previousApp.url;
+            // Function to go forward to last app
+            function goForwardToLastApp() {
+                if (lastOpenedApp) {
+                    window.location.href = lastOpenedApp.url;
                 }
             }
             
             // Function to reset navigation history
             function resetNavigationHistory() {
-                navigationHistory = {
-                    previousApp: null,
-                    currentApp: null
-                };
-                updateNavigationTriangles();
+                lastOpenedApp = null;
+                updateNavigationArrows();
             }
             
             // Function to update the clock
@@ -711,6 +683,7 @@
                 const hash = window.location.hash;
                 if (hash === '#bluepage') {
                     showPage(bluePage);
+                    updateNavigationArrows();
                 } else {
                     // Default to black page
                     showPage(blackPage);
@@ -728,9 +701,8 @@
                 page.style.display = 'flex';
             }
             
-            // Navigation triangle event listeners
-            backTriangle.addEventListener('click', goBackToDesktop);
-            forwardTriangle.addEventListener('click', goForwardToApp);
+            // Navigation arrow event listeners
+            forwardArrow.addEventListener('click', goForwardToLastApp);
             
             // Toggle dropdown menu
             startButton.addEventListener('click', function(event) {
@@ -782,8 +754,8 @@
                 navigateToApp('dotgame.html#purplepage', 'Dot Game');
             });
             
-            // Initialize navigation triangles
-            updateNavigationTriangles();
+            // Initialize navigation arrows
+            updateNavigationArrows();
             
             // Check URL fragment on page load
             checkUrlFragment();
