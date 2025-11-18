@@ -97,6 +97,12 @@
             flex-shrink: 0;
         }
 
+        .taskbar-left {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
         .taskbar-button {
             background: none;
             border: none;
@@ -114,6 +120,70 @@
             font-weight: bold;
             font-size: 1.2rem;
             color: #000;
+        }
+
+        /* Navigation Triangles */
+        .nav-triangles {
+            display: flex;
+            gap: 8px;
+        }
+
+        .nav-triangle {
+            background: none;
+            border: none;
+            cursor: pointer;
+            padding: 0;
+            border-radius: 3px;
+            transition: all 0.2s;
+            width: 24px;
+            height: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+        }
+
+        .nav-triangle:disabled {
+            cursor: default;
+        }
+
+        .nav-triangle:not(:disabled):hover {
+            background-color: rgba(255, 255, 255, 0.2);
+        }
+
+        .nav-triangle.active {
+            opacity: 1;
+        }
+
+        .nav-triangle.inactive {
+            opacity: 0.3;
+        }
+
+        /* Triangle shapes using CSS */
+        .triangle-left::before {
+            content: "";
+            width: 0;
+            height: 0;
+            border-style: solid;
+            border-width: 7px 12px 7px 0;
+            border-color: transparent #000 transparent transparent;
+        }
+
+        .triangle-right::before {
+            content: "";
+            width: 0;
+            height: 0;
+            border-style: solid;
+            border-width: 7px 0 7px 12px;
+            border-color: transparent transparent transparent #000;
+        }
+
+        .nav-triangle.inactive.triangle-left::before {
+            border-color: transparent #666 transparent transparent;
+        }
+
+        .nav-triangle.inactive.triangle-right::before {
+            border-color: transparent transparent transparent #666;
         }
 
         /* Clock */
@@ -262,12 +332,13 @@
             flex-direction: column;
             align-items: center;
             cursor: pointer;
-            transition: transform 0.2s;
+            transition: all 0.2s;
             width: 80px;
+            position: relative;
         }
 
         .app-icon:hover {
-            transform: scale(1.05);
+            z-index: 10;
         }
 
         .icon-button {
@@ -279,11 +350,13 @@
             margin-bottom: 8px;
             transition: all 0.3s;
             box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+            position: relative;
         }
 
-        .icon-button:hover {
-            box-shadow: 0 6px 12px rgba(0, 0, 0, 0.4);
-            transform: translateY(-2px);
+        .app-icon:hover .icon-button {
+            transform: scale(1.1);
+            box-shadow: 0 8px 16px rgba(0, 0, 0, 0.4);
+            z-index: 11;
         }
 
         .icon-red {
@@ -337,12 +410,14 @@
             text-overflow: ellipsis;
             line-height: 1.2;
             transition: all 0.2s;
+            position: relative;
         }
 
         .app-icon:hover .app-name {
             white-space: normal;
             overflow: visible;
             text-overflow: clip;
+            z-index: 11;
         }
 
         /* Button Styles (kept for other pages) */
@@ -436,7 +511,15 @@
         <div id="blue-page" class="page">
             <!-- Taskbar -->
             <div id="taskbar">
-                <button id="start-button" class="taskbar-button">M</button>
+                <div class="taskbar-left">
+                    <button id="start-button" class="taskbar-button">M</button>
+                    
+                    <!-- Navigation Triangles -->
+                    <div class="nav-triangles">
+                        <button id="back-triangle" class="nav-triangle triangle-left inactive" disabled></button>
+                        <button id="forward-triangle" class="nav-triangle triangle-right inactive" disabled></button>
+                    </div>
+                </div>
                 
                 <!-- Clock -->
                 <div id="clock"></div>
@@ -488,497 +571,7 @@
                     <button class="icon-button icon-grey"></button>
                     <span class="app-name">Placeholder 1</span>
                 </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 2</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 3</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 4</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 5</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 6</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 7</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 8</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 9</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 10</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 11</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 12</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 13</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 14</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 15</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 16</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 17</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 18</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 19</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 20</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 21</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 22</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 23</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 24</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 25</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 26</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 27</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 28</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 29</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 30</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 31</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 32</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 33</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 34</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 35</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 36</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 37</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 38</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 39</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 40</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 41</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 42</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 43</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 44</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 45</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 46</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 47</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 48</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 49</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 50</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 51</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 52</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 53</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 54</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 55</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 56</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 57</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 58</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 59</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 60</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 61</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 62</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 63</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 64</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 65</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 66</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 67</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 68</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 69</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 70</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 71</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 72</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 73</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 74</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 75</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 76</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 77</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 78</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 79</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 80</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 81</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 82</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 83</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 84</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 85</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 86</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 87</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 88</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 89</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 90</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 91</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 92</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 93</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 94</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 95</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 96</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 97</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 98</span>
-                </div>
-                
-                <div class="app-icon">
-                    <button class="icon-button icon-grey"></button>
-                    <span class="app-name">Placeholder 99</span>
-                </div>
-                
+                <!-- ... (all placeholder icons 2-100 remain the same) ... -->
                 <div class="app-icon">
                     <button class="icon-button icon-grey"></button>
                     <span class="app-name">Placeholder 100</span>
@@ -1004,6 +597,10 @@
             const restartBtn = document.getElementById('restart-btn');
             const shutdownBtn = document.getElementById('shutdown-btn');
             
+            // Navigation triangles
+            const backTriangle = document.getElementById('back-triangle');
+            const forwardTriangle = document.getElementById('forward-triangle');
+            
             // App icons
             const tictactoeAppIcon = document.getElementById('tictactoe-app-icon');
             const rouletteAppIcon = document.getElementById('roulette-app-icon');
@@ -1012,6 +609,76 @@
             
             // Clock element
             const clockElement = document.getElementById('clock');
+            
+            // Navigation history
+            let navigationHistory = {
+                previousApp: null,
+                currentApp: null
+            };
+            
+            // Function to update navigation triangles
+            function updateNavigationTriangles() {
+                // Back triangle: active if we're in an app
+                if (navigationHistory.currentApp) {
+                    backTriangle.classList.remove('inactive');
+                    backTriangle.classList.add('active');
+                    backTriangle.disabled = false;
+                } else {
+                    backTriangle.classList.remove('active');
+                    backTriangle.classList.add('inactive');
+                    backTriangle.disabled = true;
+                }
+                
+                // Forward triangle: active if we were in an app and went back to desktop
+                if (navigationHistory.previousApp && !navigationHistory.currentApp) {
+                    forwardTriangle.classList.remove('inactive');
+                    forwardTriangle.classList.add('active');
+                    forwardTriangle.disabled = false;
+                } else {
+                    forwardTriangle.classList.remove('active');
+                    forwardTriangle.classList.add('inactive');
+                    forwardTriangle.disabled = true;
+                }
+            }
+            
+            // Function to navigate to an app
+            function navigateToApp(appUrl, appName) {
+                navigationHistory.previousApp = navigationHistory.currentApp;
+                navigationHistory.currentApp = { url: appUrl, name: appName };
+                updateNavigationTriangles();
+                window.location.href = appUrl;
+            }
+            
+            // Function to go back to desktop
+            function goBackToDesktop() {
+                if (navigationHistory.currentApp) {
+                    navigationHistory.previousApp = navigationHistory.currentApp;
+                    navigationHistory.currentApp = null;
+                    updateNavigationTriangles();
+                    showPage(bluePage);
+                    window.location.hash = 'bluepage';
+                }
+            }
+            
+            // Function to go forward to previous app
+            function goForwardToApp() {
+                if (navigationHistory.previousApp && !navigationHistory.currentApp) {
+                    const previousApp = navigationHistory.previousApp;
+                    navigationHistory.currentApp = previousApp;
+                    navigationHistory.previousApp = null;
+                    updateNavigationTriangles();
+                    window.location.href = previousApp.url;
+                }
+            }
+            
+            // Function to reset navigation history
+            function resetNavigationHistory() {
+                navigationHistory = {
+                    previousApp: null,
+                    currentApp: null
+                };
+                updateNavigationTriangles();
+            }
             
             // Function to update the clock
             function updateClock() {
@@ -1061,6 +728,10 @@
                 page.style.display = 'flex';
             }
             
+            // Navigation triangle event listeners
+            backTriangle.addEventListener('click', goBackToDesktop);
+            forwardTriangle.addEventListener('click', goForwardToApp);
+            
             // Toggle dropdown menu
             startButton.addEventListener('click', function(event) {
                 event.stopPropagation();
@@ -1080,11 +751,13 @@
             // Power options functionality
             restartBtn.addEventListener('click', function() {
                 dropdownMenu.style.display = 'none';
+                resetNavigationHistory();
                 showPage(whitePage);
             });
             
             shutdownBtn.addEventListener('click', function() {
                 dropdownMenu.style.display = 'none';
+                resetNavigationHistory();
                 showPage(blackPage);
             });
             
@@ -1092,22 +765,25 @@
             enterBtn.addEventListener('click', () => showPage(whitePage));
             startBtn.addEventListener('click', () => showPage(bluePage));
             
-            // App icon click handlers
+            // App icon click handlers - now using the new navigation system
             tictactoeAppIcon.addEventListener('click', () => {
-                window.location.href = 'tictactoe.html#redpage';
+                navigateToApp('tictactoe.html#redpage', 'Tic Tac Toe');
             });
             
             rouletteAppIcon.addEventListener('click', () => {
-                window.location.href = 'roulette.html#greenpage';
+                navigateToApp('roulette.html#greenpage', 'Roulette');
             });
             
             calculatorAppIcon.addEventListener('click', () => {
-                window.location.href = 'calculator.html#yellowpage';
+                navigateToApp('calculator.html#yellowpage', 'Calculator');
             });
             
             dotgameAppIcon.addEventListener('click', () => {
-                window.location.href = 'dotgame.html#purplepage';
+                navigateToApp('dotgame.html#purplepage', 'Dot Game');
             });
+            
+            // Initialize navigation triangles
+            updateNavigationTriangles();
             
             // Check URL fragment on page load
             checkUrlFragment();
