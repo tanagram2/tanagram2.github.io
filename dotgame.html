@@ -802,92 +802,36 @@
         function makeComputerMove() {
             if (!gameActive) return;
             
-            // First, check for moves that would complete a square (good moves)
-            const completingMoves = [];
+            // Simplified AI logic:
+            // 1. First, look for moves that complete squares (good moves)
+            // 2. Then, look for safe moves that don't create 3-sided squares
+            // 3. If only bad moves remain, pick one randomly
             
-            // Then, check for moves that create 3-sided squares (bad moves)
+            const completingMoves = [];
+            const safeMoves = [];
             const badMoves = [];
             
-            // And moves that don't create 3-sided squares (safe moves)
-            const safeMoves = [];
-            
             for (const move of availableMoves) {
-                // Temporarily add this line to check its effects
+                // Check if this move would complete any square
+                let completesSquare = false;
+                let createsThreeSidedSquare = false;
+                
+                // Simulate this move
                 const tempLines = { ...lines };
                 const lineId = getLineId(move.dot1.row, move.dot1.col, move.dot2.row, move.dot2.col);
                 tempLines[lineId] = 'blue';
                 
-                let completesSquare = false;
-                let createsThreeSidedSquare = false;
-                
                 // Check adjacent squares for completion
-                if (move.dot1.row === move.dot2.row) {
-                    // Horizontal line
-                    const row = move.dot1.row;
-                    const col = Math.min(move.dot1.col, move.dot2.col);
-                    
-                    // Check square above
-                    if (row > 0) {
-                        const topLine = getLineId(row-1, col, row, col);
-                        const rightLine = getLineId(row, col, row, col+1);
-                        const topRightLine = getLineId(row-1, col, row-1, col+1);
-                        
-                        if (tempLines[topLine] && tempLines[rightLine] && tempLines[topRightLine]) {
-                            if (!squares[`${row-1}-${col}`]) {
-                                completesSquare = true;
-                            }
-                        } else if ((tempLines[topLine] ? 1 : 0) + (tempLines[rightLine] ? 1 : 0) + (tempLines[topRightLine] ? 1 : 0) === 3) {
-                            createsThreeSidedSquare = true;
-                        }
+                const adjacentSquares = getAdjacentSquares(move);
+                
+                for (const square of adjacentSquares) {
+                    if (isSquareCompleted(square, tempLines) && !squares[square]) {
+                        completesSquare = true;
                     }
                     
-                    // Check square below
-                    if (row < CONFIG.GRID_SIZE - 1) {
-                        const bottomLine = getLineId(row, col, row+1, col);
-                        const rightLine = getLineId(row, col, row, col+1);
-                        const bottomRightLine = getLineId(row, col+1, row+1, col+1);
-                        
-                        if (tempLines[bottomLine] && tempLines[rightLine] && tempLines[bottomRightLine]) {
-                            if (!squares[`${row}-${col}`]) {
-                                completesSquare = true;
-                            }
-                        } else if ((tempLines[bottomLine] ? 1 : 0) + (tempLines[rightLine] ? 1 : 0) + (tempLines[bottomRightLine] ? 1 : 0) === 3) {
-                            createsThreeSidedSquare = true;
-                        }
-                    }
-                } else {
-                    // Vertical line
-                    const col = move.dot1.col;
-                    const row = Math.min(move.dot1.row, move.dot2.row);
-                    
-                    // Check square to the left
-                    if (col > 0) {
-                        const leftLine = getLineId(row, col-1, row, col);
-                        const bottomLine = getLineId(row, col, row+1, col);
-                        const bottomLeftLine = getLineId(row, col-1, row+1, col-1);
-                        
-                        if (tempLines[leftLine] && tempLines[bottomLine] && tempLines[bottomLeftLine]) {
-                            if (!squares[`${row}-${col-1}`]) {
-                                completesSquare = true;
-                            }
-                        } else if ((tempLines[leftLine] ? 1 : 0) + (tempLines[bottomLine] ? 1 : 0) + (tempLines[bottomLeftLine] ? 1 : 0) === 3) {
-                            createsThreeSidedSquare = true;
-                        }
-                    }
-                    
-                    // Check square to the right
-                    if (col < CONFIG.GRID_SIZE - 1) {
-                        const rightLine = getLineId(row, col, row, col+1);
-                        const bottomLine = getLineId(row, col, row+1, col);
-                        const bottomRightLine = getLineId(row, col+1, row+1, col+1);
-                        
-                        if (tempLines[rightLine] && tempLines[bottomLine] && tempLines[bottomRightLine]) {
-                            if (!squares[`${row}-${col}`]) {
-                                completesSquare = true;
-                            }
-                        } else if ((tempLines[rightLine] ? 1 : 0) + (tempLines[bottomLine] ? 1 : 0) + (tempLines[bottomRightLine] ? 1 : 0) === 3) {
-                            createsThreeSidedSquare = true;
-                        }
+                    // Check if this creates a 3-sided square for opponent
+                    if (countSquareSides(square, tempLines) === 3 && !squares[square]) {
+                        createsThreeSidedSquare = true;
                     }
                 }
                 
@@ -900,41 +844,85 @@
                 }
             }
             
-            // Strategy: 
-            // 1. First priority: moves that complete squares
-            // 2. Second priority: safe moves (don't create 3-sided squares)
-            // 3. Last resort: bad moves (create 3-sided squares)
+            let chosenMove;
             
+            // Strategy: Complete squares first, then safe moves, then bad moves as last resort
             if (completingMoves.length > 0) {
-                // Make a move that completes a square
-                const randomIndex = Math.floor(Math.random() * completingMoves.length);
-                const move = completingMoves[randomIndex];
-                makeComputerLine(move.dot1.row, move.dot1.col, move.dot2.row, move.dot2.col);
-                return;
+                chosenMove = completingMoves[Math.floor(Math.random() * completingMoves.length)];
+            } else if (safeMoves.length > 0) {
+                chosenMove = safeMoves[Math.floor(Math.random() * safeMoves.length)];
+            } else if (badMoves.length > 0) {
+                chosenMove = badMoves[Math.floor(Math.random() * badMoves.length)];
+            } else if (availableMoves.length > 0) {
+                chosenMove = availableMoves[Math.floor(Math.random() * availableMoves.length)];
             }
             
-            if (safeMoves.length > 0) {
-                // Make a safe move (doesn't create 3-sided squares)
-                const randomIndex = Math.floor(Math.random() * safeMoves.length);
-                const move = safeMoves[randomIndex];
-                makeComputerLine(move.dot1.row, move.dot1.col, move.dot2.row, move.dot2.col);
-                return;
+            if (chosenMove) {
+                makeComputerLine(chosenMove.dot1.row, chosenMove.dot1.col, chosenMove.dot2.row, chosenMove.dot2.col);
+            }
+        }
+
+        function getAdjacentSquares(move) {
+            const squares = [];
+            const { dot1, dot2 } = move;
+            
+            if (dot1.row === dot2.row) {
+                // Horizontal line
+                const row = dot1.row;
+                const col = Math.min(dot1.col, dot2.col);
+                
+                // Check square above
+                if (row > 0) {
+                    squares.push(`${row-1}-${col}`);
+                }
+                // Check square below
+                if (row < CONFIG.GRID_SIZE - 1) {
+                    squares.push(`${row}-${col}`);
+                }
+            } else {
+                // Vertical line
+                const col = dot1.col;
+                const row = Math.min(dot1.row, dot2.row);
+                
+                // Check square to the left
+                if (col > 0) {
+                    squares.push(`${row}-${col-1}`);
+                }
+                // Check square to the right
+                if (col < CONFIG.GRID_SIZE - 1) {
+                    squares.push(`${row}-${col}`);
+                }
             }
             
-            if (badMoves.length > 0) {
-                // Only make a bad move if no other options exist
-                const randomIndex = Math.floor(Math.random() * badMoves.length);
-                const move = badMoves[randomIndex];
-                makeComputerLine(move.dot1.row, move.dot1.col, move.dot2.row, move.dot2.col);
-                return;
-            }
+            return squares;
+        }
+
+        function isSquareCompleted(squareId, lineState) {
+            const [row, col] = squareId.split('-').map(Number);
             
-            // Fallback: make a random move (shouldn't happen since we check availableMoves)
-            if (availableMoves.length > 0) {
-                const randomIndex = Math.floor(Math.random() * availableMoves.length);
-                const move = availableMoves[randomIndex];
-                makeComputerLine(move.dot1.row, move.dot1.col, move.dot2.row, move.dot2.col);
-            }
+            const topLine = getLineId(row, col, row, col + 1);
+            const rightLine = getLineId(row, col + 1, row + 1, col + 1);
+            const bottomLine = getLineId(row + 1, col, row + 1, col + 1);
+            const leftLine = getLineId(row, col, row + 1, col);
+            
+            return lineState[topLine] && lineState[rightLine] && lineState[bottomLine] && lineState[leftLine];
+        }
+
+        function countSquareSides(squareId, lineState) {
+            const [row, col] = squareId.split('-').map(Number);
+            
+            const topLine = getLineId(row, col, row, col + 1);
+            const rightLine = getLineId(row, col + 1, row + 1, col + 1);
+            const bottomLine = getLineId(row + 1, col, row + 1, col + 1);
+            const leftLine = getLineId(row, col, row + 1, col);
+            
+            let count = 0;
+            if (lineState[topLine]) count++;
+            if (lineState[rightLine]) count++;
+            if (lineState[bottomLine]) count++;
+            if (lineState[leftLine]) count++;
+            
+            return count;
         }
 
         function makeComputerLine(row1, col1, row2, col2) {
