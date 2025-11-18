@@ -1,0 +1,854 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dot Game - MartianOS</title>
+    <style>
+        /* Global Styles */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Courier New', monospace;
+        }
+
+        body {
+            overflow: hidden;
+            height: 100vh;
+            width: 100vw;
+        }
+
+        #main-container {
+            width: 100%;
+            height: 100%;
+            position: relative;
+        }
+
+        /* Page Styles - All pages are full screen */
+        .page {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            transition: opacity 0.3s;
+        }
+
+        /* Black Page (Matrix-like) */
+        #black-page {
+            background-color: #000;
+            color: #8a2be2;
+            z-index: 5;
+        }
+
+        #martian-matrix {
+            font-size: 2.5rem;
+            margin-bottom: 2rem;
+            text-shadow: 0 0 10px #8a2be2;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% { opacity: 0.7; }
+            50% { opacity: 1; }
+            100% { opacity: 0.7; }
+        }
+
+        /* White Page */
+        #white-page {
+            background-color: #fff;
+            color: #000;
+            z-index: 4;
+            display: none;
+        }
+
+        #martian-os {
+            font-size: 3rem;
+            margin-bottom: 2rem;
+        }
+
+        /* Blue Page */
+        #blue-page {
+            background-color: #1a237e;
+            color: #fff;
+            z-index: 3;
+            display: none;
+        }
+
+        .blue-page-title {
+            font-size: 2.5rem;
+            margin-bottom: 3rem;
+        }
+
+        /* Purple Page - Dot Game App */
+        #purple-page {
+            background-color: #6a1b9a;
+            color: #fff;
+            z-index: 2;
+            display: none;
+        }
+
+        /* Button Styles */
+        .btn {
+            padding: 15px 40px;
+            font-size: 1.2rem;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: all 0.3s;
+            font-weight: bold;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .btn:hover {
+            transform: scale(1.05);
+            box-shadow: 0 0 15px rgba(255, 255, 255, 0.5);
+        }
+
+        .btn-purple {
+            background-color: #6a1b9a;
+            color: #fff;
+        }
+
+        .btn-purple:hover {
+            background-color: #8e24aa;
+        }
+
+        .btn-grey {
+            background-color: #9e9e9e;
+            color: #fff;
+        }
+
+        .btn-grey:hover {
+            background-color: #bdbdbd;
+        }
+
+        .btn-blue {
+            background-color: #03a9f4;
+            color: #fff;
+        }
+
+        .btn-blue:hover {
+            background-color: #29b6f6;
+        }
+
+        .btn-red {
+            background-color: #d00;
+            color: #fff;
+        }
+
+        .btn-red:hover {
+            background-color: #f00;
+        }
+
+        .btn-green {
+            background-color: #0a0;
+            color: #fff;
+        }
+
+        .btn-green:hover {
+            background-color: #0f0;
+        }
+
+        .btn-black {
+            background-color: #000;
+            color: #fff;
+        }
+
+        .btn-black:hover {
+            background-color: #333;
+        }
+
+        /* Button Container for Blue Page */
+        .button-container {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        /* Dot Game Styles */
+        .back-button {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            padding: 10px 20px;
+            background-color: #03a9f4;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-weight: bold;
+        }
+
+        .back-button:hover {
+            background-color: #29b6f6;
+        }
+
+        #dotgame-container {
+            background-color: white;
+            border: 3px solid black;
+            border-radius: 10px;
+            padding: 30px;
+            width: 95%;
+            max-width: 800px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            color: black;
+        }
+
+        #dotgame-title {
+            font-size: 2rem;
+            margin-bottom: 20px;
+        }
+
+        #game-setup, #game-board, #game-result, #mode-selection {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 15px;
+            width: 100%;
+        }
+
+        #game-board, #game-result, #mode-selection {
+            display: none;
+        }
+
+        .game-info {
+            display: flex;
+            justify-content: space-between;
+            width: 100%;
+            max-width: 600px;
+            margin-bottom: 20px;
+            font-size: 1.2rem;
+            font-weight: bold;
+        }
+
+        .player-score {
+            padding: 10px 20px;
+            border-radius: 5px;
+            text-align: center;
+        }
+
+        .player-red {
+            background-color: #ffebee;
+            color: #d32f2f;
+            border: 2px solid #d32f2f;
+        }
+
+        .player-blue {
+            background-color: #e3f2fd;
+            color: #1976d2;
+            border: 2px solid #1976d2;
+        }
+
+        #game-status {
+            font-size: 1.2rem;
+            margin: 10px 0;
+            height: 30px;
+            font-weight: bold;
+        }
+
+        .dot-board {
+            position: relative;
+            width: 600px;
+            height: 600px;
+            background-color: white;
+            border: 2px solid #333;
+        }
+
+        .dot {
+            position: absolute;
+            width: 12px;
+            height: 12px;
+            background-color: #000;
+            border-radius: 50%;
+            transform: translate(-50%, -50%);
+            cursor: pointer;
+            z-index: 2;
+        }
+
+        .dot.highlighted {
+            background-color: #ffeb3b;
+            box-shadow: 0 0 0 3px #ff9800;
+            z-index: 3;
+        }
+
+        .dot.available {
+            background-color: #9e9e9e;
+            box-shadow: 0 0 0 2px #757575;
+            z-index: 3;
+        }
+
+        .line {
+            position: absolute;
+            background-color: transparent;
+            z-index: 1;
+            transform-origin: 0 0;
+        }
+
+        .line.red {
+            background-color: #d32f2f;
+        }
+
+        .line.blue {
+            background-color: #1976d2;
+        }
+
+        .square {
+            position: absolute;
+            z-index: 0;
+            opacity: 0.7;
+        }
+
+        .square.red {
+            background-color: #ffcdd2;
+        }
+
+        .square.blue {
+            background-color: #bbdefb;
+        }
+
+        .mode-buttons {
+            display: flex;
+            gap: 15px;
+        }
+
+        .result-buttons {
+            display: flex;
+            gap: 15px;
+            margin-top: 15px;
+        }
+
+        #winner-message {
+            font-size: 1.5rem;
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+
+        #score-message {
+            font-size: 1.2rem;
+            margin-bottom: 20px;
+        }
+
+        .board-disabled {
+            pointer-events: none;
+            opacity: 0.7;
+        }
+    </style>
+</head>
+<body>
+    <div id="main-container">
+        <!-- Black Page -->
+        <div id="black-page" class="page">
+            <h1 id="martian-matrix">MartianMatrix</h1>
+            <button id="enter-btn" class="btn btn-purple">ENTER</button>
+        </div>
+
+        <!-- White Page -->
+        <div id="white-page" class="page">
+            <h1 id="martian-os">MartianOS</h1>
+            <button id="start-btn" class="btn btn-purple">START</button>
+        </div>
+
+        <!-- Blue Page -->
+        <div id="blue-page" class="page">
+            <h1 class="blue-page-title">Application Menu</h1>
+            <div class="button-container">
+                <button id="purple-app-btn" class="btn btn-purple">Dot Game</button>
+                <button class="btn btn-grey">Placeholder</button>
+            </div>
+        </div>
+
+        <!-- Purple Page - Dot Game App -->
+        <div id="purple-page" class="page">
+            <button class="back-button" onclick="goBackToIndex()">← Back to OS</button>
+            <div id="dotgame-container">
+                <h2 id="dotgame-title">Dot Game</h2>
+                
+                <div id="game-setup">
+                    <button id="dotgame-start" class="btn btn-black">Start Game</button>
+                </div>
+                
+                <div id="mode-selection">
+                    <div class="mode-buttons">
+                        <button id="one-player" class="btn btn-red">1 Player</button>
+                        <button id="two-player" class="btn btn-blue">2 Players</button>
+                    </div>
+                </div>
+                
+                <div id="game-board">
+                    <div class="game-info">
+                        <div class="player-score player-red" id="red-score">Player 1 (Red): 0</div>
+                        <div class="player-score player-blue" id="blue-score">Player 2 (Blue): 0</div>
+                    </div>
+                    <div id="game-status">Player 1's turn (Red)</div>
+                    <div class="dot-board" id="board">
+                        <!-- Dots and lines will be generated by JavaScript -->
+                    </div>
+                </div>
+                
+                <div id="game-result">
+                    <div id="winner-message"></div>
+                    <div id="score-message"></div>
+                    <div class="result-buttons">
+                        <button id="retry-btn" class="btn btn-green">Retry</button>
+                        <button id="go-back-btn" class="btn btn-blue">Go Back</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Page navigation logic
+        document.addEventListener('DOMContentLoaded', function() {
+            // Get all page elements
+            const blackPage = document.getElementById('black-page');
+            const whitePage = document.getElementById('white-page');
+            const bluePage = document.getElementById('blue-page');
+            const purplePage = document.getElementById('purple-page');
+            
+            // Navigation buttons
+            const enterBtn = document.getElementById('enter-btn');
+            const startBtn = document.getElementById('start-btn');
+            const purpleAppBtn = document.getElementById('purple-app-btn');
+            
+            // Check URL fragment to determine which page to show
+            function checkUrlFragment() {
+                const hash = window.location.hash;
+                if (hash === '#bluepage') {
+                    showPage(bluePage);
+                } else if (hash === '#purplepage') {
+                    showPage(purplePage);
+                } else {
+                    // Default to black page
+                    showPage(blackPage);
+                }
+            }
+            
+            // Navigation functions
+            function showPage(page) {
+                // Hide all pages
+                blackPage.style.display = 'none';
+                whitePage.style.display = 'none';
+                bluePage.style.display = 'none';
+                purplePage.style.display = 'none';
+                
+                // Show the requested page
+                page.style.display = 'flex';
+            }
+            
+            // Set up event listeners for navigation
+            enterBtn.addEventListener('click', () => showPage(whitePage));
+            startBtn.addEventListener('click', () => showPage(bluePage));
+            purpleAppBtn.addEventListener('click', () => showPage(purplePage));
+            
+            // Check URL fragment on page load
+            checkUrlFragment();
+            
+            // Also check when URL fragment changes
+            window.addEventListener('hashchange', checkUrlFragment);
+        });
+
+        // Function to go back to index.html on blue page
+        function goBackToIndex() {
+            window.location.href = 'index.html#bluepage';
+        }
+
+        // Dot Game Logic
+        const gameSetup = document.getElementById('game-setup');
+        const modeSelection = document.getElementById('mode-selection');
+        const gameBoard = document.getElementById('game-board');
+        const gameResult = document.getElementById('game-result');
+        const dotgameStart = document.getElementById('dotgame-start');
+        const onePlayerBtn = document.getElementById('one-player');
+        const twoPlayerBtn = document.getElementById('two-player');
+        const retryBtn = document.getElementById('retry-btn');
+        const goBackBtn = document.getElementById('go-back-btn');
+        const gameStatus = document.getElementById('game-status');
+        const redScoreDisplay = document.getElementById('red-score');
+        const blueScoreDisplay = document.getElementById('blue-score');
+        const winnerMessage = document.getElementById('winner-message');
+        const scoreMessage = document.getElementById('score-message');
+        const boardElement = document.getElementById('board');
+
+        const GRID_SIZE = 13;
+        const DOT_SPACING = 50;
+        const BOARD_SIZE = 600;
+
+        let gameMode = '';
+        let gameActive = false;
+        let currentPlayer = 'red';
+        let redScore = 0;
+        let blueScore = 0;
+        let selectedDot = null;
+        let lines = {};
+        let squares = {};
+        let availableMoves = [];
+        let isComputerTurn = false;
+
+        function resetDotGame() {
+            gameSetup.style.display = 'flex';
+            modeSelection.style.display = 'none';
+            gameBoard.style.display = 'none';
+            gameResult.style.display = 'none';
+            
+            currentPlayer = 'red';
+            gameMode = '';
+            gameActive = false;
+            redScore = 0;
+            blueScore = 0;
+            selectedDot = null;
+            lines = {};
+            squares = {};
+            availableMoves = [];
+            isComputerTurn = false;
+            
+            boardElement.innerHTML = '';
+            boardElement.classList.remove('board-disabled');
+            updateScores();
+            gameStatus.textContent = '';
+        }
+
+        function updateScores() {
+            redScoreDisplay.textContent = `Player 1 (Red): ${redScore}`;
+            blueScoreDisplay.textContent = gameMode === '1-player' ? 
+                `Computer (Blue): ${blueScore}` : `Player 2 (Blue): ${blueScore}`;
+        }
+
+        function updateGameStatus() {
+            if (gameMode === '1-player') {
+                gameStatus.textContent = currentPlayer === 'red' ? 
+                    'Your turn (Red)' : 'Computer\'s turn (Blue)';
+            } else {
+                gameStatus.textContent = currentPlayer === 'red' ? 
+                    'Player 1\'s turn (Red)' : 'Player 2\'s turn (Blue)';
+            }
+        }
+
+        function initializeBoard() {
+            boardElement.innerHTML = '';
+            
+            // Create dots
+            for (let row = 0; row < GRID_SIZE; row++) {
+                for (let col = 0; col < GRID_SIZE; col++) {
+                    const dot = document.createElement('div');
+                    dot.className = 'dot';
+                    dot.dataset.row = row;
+                    dot.dataset.col = col;
+                    
+                    const x = col * DOT_SPACING;
+                    const y = row * DOT_SPACING;
+                    
+                    dot.style.left = `${x}px`;
+                    dot.style.top = `${y}px`;
+                    
+                    dot.addEventListener('click', handleDotClick);
+                    boardElement.appendChild(dot);
+                }
+            }
+            
+            updateAvailableMoves();
+        }
+
+        function updateAvailableMoves() {
+            availableMoves = [];
+            
+            for (let row = 0; row < GRID_SIZE; row++) {
+                for (let col = 0; col < GRID_SIZE; col++) {
+                    // Check right connection
+                    if (col < GRID_SIZE - 1) {
+                        const lineId = getLineId(row, col, row, col + 1);
+                        if (!lines[lineId]) {
+                            availableMoves.push({
+                                dot1: { row, col },
+                                dot2: { row, col: col + 1 }
+                            });
+                        }
+                    }
+                    
+                    // Check down connection
+                    if (row < GRID_SIZE - 1) {
+                        const lineId = getLineId(row, col, row + 1, col);
+                        if (!lines[lineId]) {
+                            availableMoves.push({
+                                dot1: { row, col },
+                                dot2: { row: row + 1, col }
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        function getLineId(row1, col1, row2, col2) {
+            if (row1 < row2 || (row1 === row2 && col1 < col2)) {
+                return `${row1}-${col1}-${row2}-${col2}`;
+            } else {
+                return `${row2}-${col2}-${row1}-${col1}`;
+            }
+        }
+
+        function handleDotClick(event) {
+            if (isComputerTurn) return;
+            if (!gameActive || (gameMode === '1-player' && currentPlayer === 'blue')) return;
+            
+            const dot = event.target;
+            const row = parseInt(dot.dataset.row);
+            const col = parseInt(dot.dataset.col);
+            
+            if (selectedDot === null) {
+                selectedDot = { row, col };
+                dot.classList.add('highlighted');
+                highlightAvailableMoves(row, col);
+            } else if (selectedDot.row === row && selectedDot.col === col) {
+                selectedDot = null;
+                dot.classList.remove('highlighted');
+                clearHighlights();
+            } else {
+                const isValidMove = availableMoves.some(move => 
+                    (move.dot1.row === selectedDot.row && move.dot1.col === selectedDot.col &&
+                     move.dot2.row === row && move.dot2.col === col) ||
+                    (move.dot2.row === selectedDot.row && move.dot2.col === selectedDot.col &&
+                     move.dot1.row === row && move.dot1.col === col)
+                );
+                
+                if (isValidMove) {
+                    makeMove(selectedDot.row, selectedDot.col, row, col);
+                }
+                
+                document.querySelector('.dot.highlighted')?.classList.remove('highlighted');
+                selectedDot = null;
+                clearHighlights();
+            }
+        }
+
+        function highlightAvailableMoves(row, col) {
+            availableMoves.forEach(move => {
+                if ((move.dot1.row === row && move.dot1.col === col) ||
+                    (move.dot2.row === row && move.dot2.col === col)) {
+                    
+                    const otherDot = move.dot1.row === row && move.dot1.col === col ? 
+                        move.dot2 : move.dot1;
+                    
+                    const dotElement = document.querySelector(
+                        `.dot[data-row="${otherDot.row}"][data-col="${otherDot.col}"]`
+                    );
+                    
+                    if (dotElement) {
+                        dotElement.classList.add('available');
+                    }
+                }
+            });
+        }
+
+        function clearHighlights() {
+            document.querySelectorAll('.dot.available').forEach(dot => {
+                dot.classList.remove('available');
+            });
+        }
+
+        function makeMove(row1, col1, row2, col2) {
+            const lineId = getLineId(row1, col1, row2, col2);
+            
+            lines[lineId] = currentPlayer;
+            drawLine(row1, col1, row2, col2, currentPlayer);
+            
+            // Check for completed squares (1x1 only)
+            const completedSquares = checkForCompletedSquares();
+            
+            let playerScored = false;
+            if (completedSquares.length > 0) {
+                completedSquares.forEach(square => {
+                    if (!squares[square]) {
+                        squares[square] = currentPlayer;
+                        fillSquare(square, currentPlayer);
+                        
+                        if (currentPlayer === 'red') {
+                            redScore++;
+                        } else {
+                            blueScore++;
+                        }
+                    }
+                });
+                
+                updateScores();
+                playerScored = true;
+            }
+            
+            updateAvailableMoves();
+            
+            if (availableMoves.length === 0 || redScore > 72 || blueScore > 72) {
+                endGame();
+                return;
+            }
+            
+            // If player scored (completed squares), they get another turn
+            if (!playerScored) {
+                currentPlayer = currentPlayer === 'red' ? 'blue' : 'red';
+            }
+            
+            updateGameStatus();
+            
+            // If computer's turn in 1-player mode
+            if (gameMode === '1-player' && currentPlayer === 'blue' && gameActive) {
+                isComputerTurn = true;
+                boardElement.classList.add('board-disabled');
+                setTimeout(makeComputerMove, 1000);
+            } else {
+                isComputerTurn = false;
+                boardElement.classList.remove('board-disabled');
+            }
+        }
+
+        function drawLine(row1, col1, row2, col2, player) {
+            const line = document.createElement('div');
+            line.className = `line ${player}`;
+            
+            const x1 = col1 * DOT_SPACING;
+            const y1 = row1 * DOT_SPACING;
+            const x2 = col2 * DOT_SPACING;
+            const y2 = row2 * DOT_SPACING;
+            
+            const length = Math.sqrt(Math.pow(x2 - x1, 2) + Math.pow(y2 - y1, 2));
+            const angle = Math.atan2(y2 - y1, x2 - x1) * 180 / Math.PI;
+            
+            line.style.width = `${length}px`;
+            line.style.height = '4px';
+            line.style.left = `${x1}px`;
+            line.style.top = `${y1}px`;
+            line.style.transform = `rotate(${angle}deg)`;
+            line.style.transformOrigin = '0 2px';
+            
+            boardElement.appendChild(line);
+        }
+
+        function checkForCompletedSquares() {
+            const completed = [];
+            
+            // Check all potential 1x1 squares
+            for (let row = 0; row < GRID_SIZE - 1; row++) {
+                for (let col = 0; col < GRID_SIZE - 1; col++) {
+                    const squareId = `${row}-${col}`;
+                    
+                    // Skip if already filled
+                    if (squares[squareId]) continue;
+                    
+                    // Check all four sides
+                    const topLine = getLineId(row, col, row, col + 1);
+                    const rightLine = getLineId(row, col + 1, row + 1, col + 1);
+                    const bottomLine = getLineId(row + 1, col, row + 1, col + 1);
+                    const leftLine = getLineId(row, col, row + 1, col);
+                    
+                    // If all four sides exist, this square is completed
+                    if (lines[topLine] && lines[rightLine] && lines[bottomLine] && lines[leftLine]) {
+                        completed.push(squareId);
+                    }
+                }
+            }
+            
+            return completed;
+        }
+
+        function fillSquare(squareId, player) {
+            const [row, col] = squareId.split('-').map(Number);
+            
+            const square = document.createElement('div');
+            square.className = `square ${player}`;
+            
+            // Fill the entire square
+            const size = DOT_SPACING;
+            square.style.width = `${size}px`;
+            square.style.height = `${size}px`;
+            square.style.left = `${col * DOT_SPACING}px`;
+            square.style.top = `${row * DOT_SPACING}px`;
+            
+            boardElement.appendChild(square);
+        }
+
+        function makeComputerMove() {
+            if (!gameActive) return;
+            
+            // Computer makes completely random moves
+            if (availableMoves.length > 0) {
+                const randomIndex = Math.floor(Math.random() * availableMoves.length);
+                const move = availableMoves[randomIndex];
+                makeComputerLine(move.dot1.row, move.dot1.col, move.dot2.row, move.dot2.col);
+            }
+        }
+
+        function makeComputerLine(row1, col1, row2, col2) {
+            makeMove(row1, col1, row2, col2);
+        }
+
+        function endGame() {
+            gameActive = false;
+            isComputerTurn = false;
+            boardElement.classList.remove('board-disabled');
+            
+            let winner;
+            if (redScore > blueScore) {
+                winner = gameMode === '1-player' ? 'You win!' : 'Player 1 (Red) wins!';
+            } else if (blueScore > redScore) {
+                winner = gameMode === '1-player' ? 'Computer wins!' : 'Player 2 (Blue) wins!';
+            } else {
+                winner = 'Game ended in a tie!';
+            }
+            
+            winnerMessage.textContent = winner;
+            scoreMessage.textContent = `Final Score - Red: ${redScore}, Blue: ${blueScore}`;
+            gameBoard.style.display = 'none';
+            gameResult.style.display = 'flex';
+        }
+
+        // Event Listeners
+        dotgameStart.addEventListener('click', function() {
+            gameSetup.style.display = 'none';
+            modeSelection.style.display = 'flex';
+        });
+        
+        onePlayerBtn.addEventListener('click', function() {
+            startGame('1-player');
+        });
+        
+        twoPlayerBtn.addEventListener('click', function() {
+            startGame('2-player');
+        });
+        
+        function startGame(mode) {
+            gameMode = mode;
+            gameActive = true;
+            currentPlayer = 'red';
+            redScore = 0;
+            blueScore = 0;
+            selectedDot = null;
+            lines = {};
+            squares = {};
+            isComputerTurn = false;
+            modeSelection.style.display = 'none';
+            gameBoard.style.display = 'flex';
+            gameResult.style.display = 'none';
+            
+            boardElement.classList.remove('board-disabled');
+            initializeBoard();
+            updateScores();
+            updateGameStatus();
+        }
+        
+        retryBtn.addEventListener('click', function() {
+            startGame(gameMode);
+        });
+        
+        goBackBtn.addEventListener('click', function() {
+            resetDotGame();
+        });
+    </script>
+</body>
+</html>
