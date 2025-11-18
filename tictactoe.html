@@ -196,7 +196,7 @@
         }
 
         /* Clock */
-        #clock {
+        .clock {
             font-size: 0.9rem;
             color: #000;
             font-weight: bold;
@@ -206,7 +206,7 @@
             transition: background-color 0.2s;
         }
 
-        #clock:hover {
+        .clock:hover {
             background-color: rgba(255, 255, 255, 0.3);
         }
 
@@ -496,7 +496,7 @@
                 </div>
                 
                 <!-- Clock -->
-                <div id="clock"></div>
+                <div class="clock" id="blue-clock"></div>
                 
                 <!-- Dropdown Menu -->
                 <div id="dropdown-menu">
@@ -538,13 +538,13 @@
                     
                     <!-- Navigation Triangles -->
                     <div class="nav-triangles">
-                        <button id="back-arrow" class="nav-triangle triangle-left active"></button>
+                        <button id="back-arrow-red" class="nav-triangle triangle-left active"></button>
                         <button id="forward-arrow" class="nav-triangle triangle-right inactive" disabled></button>
                     </div>
                 </div>
                 
                 <!-- Clock -->
-                <div id="clock"></div>
+                <div class="clock" id="red-clock"></div>
                 
                 <!-- Dropdown Menu -->
                 <div id="dropdown-menu">
@@ -628,15 +628,16 @@
             const restartBtn = document.getElementById('restart-btn');
             const shutdownBtn = document.getElementById('shutdown-btn');
             
-            // Navigation triangles
-            const backArrow = document.getElementById('back-arrow');
-            const forwardArrow = document.getElementById('forward-arrow');
+            // Navigation triangles - separate for each page
+            const backArrowBlue = document.getElementById('back-arrow');
+            const backArrowRed = document.getElementById('back-arrow-red');
             
-            // Clock element
-            const clockElement = document.getElementById('clock');
+            // Clock elements - get all clocks
+            const blueClock = document.getElementById('blue-clock');
+            const redClock = document.getElementById('red-clock');
             
-            // Function to update the clock
-            function updateClock() {
+            // Function to update all clocks
+            function updateAllClocks() {
                 const now = new Date();
                 
                 // Format time (12-hour with AM/PM)
@@ -653,29 +654,24 @@
                 const day = now.getDate().toString().padStart(2, '0');
                 const year = now.getFullYear();
                 
-                // Update clock display
-                clockElement.textContent = `${hours}:${minutes}:${seconds} ${ampm} | ${month}/${day}/${year}`;
+                const timeString = `${hours}:${minutes}:${seconds} ${ampm} | ${month}/${day}/${year}`;
+                
+                // Update all clock displays
+                if (blueClock) blueClock.textContent = timeString;
+                if (redClock) redClock.textContent = timeString;
             }
             
-            // Initialize and update clock every second
-            updateClock();
-            setInterval(updateClock, 1000);
+            // Initialize and update clocks every second
+            updateAllClocks();
+            setInterval(updateAllClocks, 1000);
             
             // Check URL fragment to determine which page to show
             function checkUrlFragment() {
                 const hash = window.location.hash;
                 if (hash === '#bluepage') {
                     showPage(bluePage);
-                    // On blue page, back arrow should be inactive
-                    backArrow.classList.remove('active');
-                    backArrow.classList.add('inactive');
-                    backArrow.disabled = true;
                 } else if (hash === '#redpage') {
                     showPage(redPage);
-                    // On red page, back arrow should be active
-                    backArrow.classList.remove('inactive');
-                    backArrow.classList.add('active');
-                    backArrow.disabled = false;
                 } else {
                     // Default to black page
                     showPage(blackPage);
@@ -694,12 +690,12 @@
                 page.style.display = 'flex';
             }
             
-            // Simple back arrow functionality - always goes back to desktop
-            backArrow.addEventListener('click', function() {
-                if (!backArrow.disabled) {
+            // Simple back arrow functionality - goes back to desktop
+            if (backArrowRed) {
+                backArrowRed.addEventListener('click', function() {
                     window.location.href = 'index.html#bluepage';
-                }
-            });
+                });
+            }
             
             // Toggle dropdown menu
             startButton.addEventListener('click', function(event) {
