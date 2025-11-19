@@ -610,48 +610,6 @@
             // Clock element
             const clockElement = document.getElementById('clock');
             
-            // Simple navigation history - just remember the last app
-            let lastOpenedApp = null;
-            
-            // Function to update navigation arrows
-            function updateNavigationArrows() {
-                // Back arrow: always inactive on desktop
-                backArrow.classList.remove('active');
-                backArrow.classList.add('inactive');
-                backArrow.disabled = true;
-                
-                // Forward arrow: active if we have a last opened app
-                if (lastOpenedApp) {
-                    forwardArrow.classList.remove('inactive');
-                    forwardArrow.classList.add('active');
-                    forwardArrow.disabled = false;
-                } else {
-                    forwardArrow.classList.remove('active');
-                    forwardArrow.classList.add('inactive');
-                    forwardArrow.disabled = true;
-                }
-            }
-            
-            // Function to navigate to an app
-            function navigateToApp(appUrl, appName) {
-                lastOpenedApp = { url: appUrl, name: appName };
-                updateNavigationArrows();
-                window.location.href = appUrl;
-            }
-            
-            // Function to go forward to last app
-            function goForwardToLastApp() {
-                if (lastOpenedApp) {
-                    window.location.href = lastOpenedApp.url;
-                }
-            }
-            
-            // Function to reset navigation history
-            function resetNavigationHistory() {
-                lastOpenedApp = null;
-                updateNavigationArrows();
-            }
-            
             // Function to update the clock
             function updateClock() {
                 const now = new Date();
@@ -683,7 +641,6 @@
                 const hash = window.location.hash;
                 if (hash === '#bluepage') {
                     showPage(bluePage);
-                    updateNavigationArrows();
                 } else {
                     // Default to black page
                     showPage(blackPage);
@@ -700,9 +657,6 @@
                 // Show the requested page
                 page.style.display = 'flex';
             }
-            
-            // Navigation arrow event listeners
-            forwardArrow.addEventListener('click', goForwardToLastApp);
             
             // Toggle dropdown menu
             startButton.addEventListener('click', function(event) {
@@ -723,13 +677,11 @@
             // Power options functionality
             restartBtn.addEventListener('click', function() {
                 dropdownMenu.style.display = 'none';
-                resetNavigationHistory();
                 showPage(whitePage);
             });
             
             shutdownBtn.addEventListener('click', function() {
                 dropdownMenu.style.display = 'none';
-                resetNavigationHistory();
                 showPage(blackPage);
             });
             
@@ -737,25 +689,22 @@
             enterBtn.addEventListener('click', () => showPage(whitePage));
             startBtn.addEventListener('click', () => showPage(bluePage));
             
-            // App icon click handlers - now using the new navigation system
+            // App icon click handlers - simplified navigation
             tictactoeAppIcon.addEventListener('click', () => {
-                navigateToApp('tictactoe.html#redpage', 'Tic Tac Toe');
+                window.location.href = 'tictactoe.html#redpage';
             });
             
             rouletteAppIcon.addEventListener('click', () => {
-                navigateToApp('roulette.html#greenpage', 'Roulette');
+                window.location.href = 'roulette.html#greenpage';
             });
             
             calculatorAppIcon.addEventListener('click', () => {
-                navigateToApp('calculator.html#yellowpage', 'Calculator');
+                window.location.href = 'calculator.html#yellowpage';
             });
             
             dotgameAppIcon.addEventListener('click', () => {
-                navigateToApp('dotgame.html#purplepage', 'Dot Game');
+                window.location.href = 'dotgame.html#purplepage';
             });
-            
-            // Initialize navigation arrows
-            updateNavigationArrows();
             
             // Check URL fragment on page load
             checkUrlFragment();
