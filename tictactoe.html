@@ -140,32 +140,29 @@
         .nav-triangle {
             background: none;
             border: none;
-            cursor: pointer;
             padding: 0;
             border-radius: 3px;
-            transition: all 0.2s;
             width: 24px;
             height: 24px;
             display: flex;
             align-items: center;
             justify-content: center;
             position: relative;
+            transition: all 0.2s;
         }
 
         .nav-triangle:disabled {
             cursor: default;
+            opacity: 0.3;
+        }
+
+        .nav-triangle:not(:disabled) {
+            cursor: pointer;
+            opacity: 1;
         }
 
         .nav-triangle:not(:disabled):hover {
             background-color: rgba(255, 255, 255, 0.2);
-        }
-
-        .nav-triangle.active {
-            opacity: 1;
-        }
-
-        .nav-triangle.inactive {
-            opacity: 0.3;
         }
 
         /* Triangle shapes using CSS */
@@ -187,11 +184,11 @@
             border-color: transparent transparent transparent #000;
         }
 
-        .nav-triangle.inactive.triangle-left::before {
+        .nav-triangle:disabled.triangle-left::before {
             border-color: transparent #666 transparent transparent;
         }
 
-        .nav-triangle.inactive.triangle-right::before {
+        .nav-triangle:disabled.triangle-right::before {
             border-color: transparent transparent transparent #666;
         }
 
@@ -327,6 +324,7 @@
             align-items: center;
             color: black;
             box-shadow: 0 8px 25px rgba(0, 0, 0, 0.3);
+            position: relative;
         }
 
         #tictactoe-title {
@@ -357,6 +355,7 @@
             background-color: #333;
             padding: 5px;
             border-radius: 5px;
+            position: relative;
         }
 
         .cell {
@@ -366,10 +365,12 @@
             display: flex;
             justify-content: center;
             align-items: center;
-            font-size: 2.5rem;
+            font-size: 3rem; /* Increased X size */
             font-weight: bold;
             cursor: pointer;
             transition: background-color 0.2s;
+            position: relative;
+            z-index: 2; /* Cells above board background */
         }
 
         .cell:hover {
@@ -381,7 +382,33 @@
         }
 
         .cell.o {
-            color: #1976d2;
+            position: relative;
+        }
+
+        .cell.o::before {
+            content: "";
+            position: absolute;
+            width: 40%; /* Even smaller circle */
+            height: 40%; /* Even smaller circle */
+            border: 5px solid #1976d2; /* Thinner border */
+            border-radius: 50%;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+        }
+
+        .board-disabled {
+            pointer-events: none;
+            opacity: 0.7;
+        }
+
+        .winning-line {
+            position: absolute;
+            background-color: #ffeb3b;
+            z-index: 3; /* Winning line above cells */
+            transform-origin: 0 0;
+            border-radius: 2px;
+            box-shadow: 0 0 10px rgba(255, 235, 59, 0.7);
         }
 
         #game-status {
@@ -749,11 +776,13 @@
         const gameStatus = document.getElementById('game-status');
         const resultMessage = document.getElementById('result-message');
         const cells = document.querySelectorAll('.cell');
+        const board = document.getElementById('board');
 
         let currentPlayer = 'X';
         let gameMode = '';
         let gameActive = false;
         let boardState = ['', '', '', '', '', '', '', '', ''];
+        let isComputerTurn = false;
 
         const winningConditions = [
             [0, 1, 2], [3, 4, 5], [6, 7, 8],
@@ -771,6 +800,7 @@
             gameMode = '';
             gameActive = false;
             boardState = ['', '', '', '', '', '', '', '', ''];
+            isComputerTurn = false;
             
             cells.forEach(cell => {
                 cell.textContent = '';
@@ -778,6 +808,10 @@
             });
             
             gameStatus.textContent = '';
+            board.classList.remove('board-disabled');
+            
+            // Remove any existing winning lines
+            document.querySelectorAll('.winning-line').forEach(line => line.remove());
         }
 
         function updateGameStatus() {
@@ -791,45 +825,139 @@
         function makeMove(index, player) {
             boardState[index] = player;
             const cell = document.querySelector(`.cell[data-index="${index}"]`);
-            cell.textContent = player;
-            cell.classList.add(player.toLowerCase());
+            
+            if (player === 'X') {
+                cell.textContent = 'X';
+                cell.classList.add('x');
+            } else {
+                // For O, we use CSS to create a perfect circle
+                cell.classList.add('o');
+            }
+        }
+
+        function disableBoard() {
+            board.classList.add('board-disabled');
+        }
+
+        function enableBoard() {
+            board.classList.remove('board-disabled');
+        }
+
+        function drawWinningLine(winningCombo, player) {
+            const line = document.createElement('div');
+            line.className = 'winning-line';
+            
+            // Set line color based on player
+            line.style.backgroundColor = player === 'X' ? '#d32f2f' : '#1976d2';
+            
+            if (winningCombo[0] === 0 && winningCombo[2] === 2) {
+                // Horizontal top row - shorter line that doesn't touch edges
+                line.style.width = '90%';
+                line.style.height = '6px';
+                line.style.top = '16.66%';
+                line.style.left = '5%';
+            } else if (winningCombo[0] === 3 && winningCombo[2] === 5) {
+                // Horizontal middle row - shorter line that doesn't touch edges
+                line.style.width = '90%';
+                line.style.height = '6px';
+                line.style.top = '50%';
+                line.style.left = '5%';
+                line.style.transform = 'translateY(-50%)';
+            } else if (winningCombo[0] === 6 && winningCombo[2] === 8) {
+                // Horizontal bottom row - shorter line that doesn't touch edges
+                line.style.width = '90%';
+                line.style.height = '6px';
+                line.style.top = '83.33%';
+                line.style.left = '5%';
+            } else if (winningCombo[0] === 0 && winningCombo[2] === 6) {
+                // Vertical left column - shorter line that doesn't touch edges
+                line.style.width = '6px';
+                line.style.height = '90%';
+                line.style.top = '5%';
+                line.style.left = '16.66%';
+            } else if (winningCombo[0] === 1 && winningCombo[2] === 7) {
+                // Vertical middle column - shorter line that doesn't touch edges
+                line.style.width = '6px';
+                line.style.height = '90%';
+                line.style.top = '5%';
+                line.style.left = '50%';
+                line.style.transform = 'translateX(-50%)';
+            } else if (winningCombo[0] === 2 && winningCombo[2] === 8) {
+                // Vertical right column - shorter line that doesn't touch edges
+                line.style.width = '6px';
+                line.style.height = '90%';
+                line.style.top = '5%';
+                line.style.left = '83.33%';
+            } else if (winningCombo[0] === 0 && winningCombo[2] === 8) {
+                // Diagonal top-left to bottom-right - keep extended for consistency
+                line.style.width = '120%';
+                line.style.height = '6px';
+                line.style.top = '50%';
+                line.style.left = '-10%';
+                line.style.transform = 'rotate(45deg)';
+                line.style.transformOrigin = 'center';
+            } else if (winningCombo[0] === 2 && winningCombo[2] === 6) {
+                // Diagonal top-right to bottom-left - keep extended for consistency
+                line.style.width = '120%';
+                line.style.height = '6px';
+                line.style.top = '50%';
+                line.style.left = '-10%';
+                line.style.transform = 'rotate(-45deg)';
+                line.style.transformOrigin = 'center';
+            }
+            
+            board.appendChild(line);
         }
 
         function makeComputerMove() {
             if (!gameActive) return;
             
-            const availableMoves = [];
-            for (let i = 0; i < 9; i++) {
-                if (boardState[i] === '') availableMoves.push(i);
-            }
+            isComputerTurn = true;
+            disableBoard();
+            updateGameStatus();
             
-            if (availableMoves.length > 0) {
-                const randomIndex = Math.floor(Math.random() * availableMoves.length);
-                const computerMoveIndex = availableMoves[randomIndex];
-                
-                makeMove(computerMoveIndex, 'O');
-                
-                if (checkWin()) {
-                    endGame('Computer wins!');
-                    return;
-                } else if (checkTie()) {
-                    endGame('Game ended in a tie!');
-                    return;
+            setTimeout(() => {
+                const availableMoves = [];
+                for (let i = 0; i < 9; i++) {
+                    if (boardState[i] === '') availableMoves.push(i);
                 }
                 
-                currentPlayer = 'X';
-                updateGameStatus();
-            }
+                if (availableMoves.length > 0) {
+                    const randomIndex = Math.floor(Math.random() * availableMoves.length);
+                    const computerMoveIndex = availableMoves[randomIndex];
+                    
+                    makeMove(computerMoveIndex, 'O');
+                    
+                    const winningCombo = checkWin();
+                    if (winningCombo) {
+                        drawWinningLine(winningCombo, 'O');
+                        setTimeout(() => {
+                            endGame('Computer wins!');
+                        }, 700);
+                        return;
+                    } else if (checkTie()) {
+                        setTimeout(() => {
+                            endGame('Game ended in a tie!');
+                        }, 700);
+                        return;
+                    }
+                    
+                    currentPlayer = 'X';
+                    isComputerTurn = false;
+                    enableBoard();
+                    updateGameStatus();
+                }
+            }, 500);
         }
 
         function checkWin() {
             for (let condition of winningConditions) {
                 const [a, b, c] = condition;
                 if (boardState[a] && boardState[a] === boardState[b] && boardState[a] === boardState[c]) {
-                    return true;
+                    return condition;
                 }
             }
-            return false;
+            return null;
         }
 
         function checkTie() {
@@ -838,9 +966,14 @@
 
         function endGame(message) {
             gameActive = false;
+            isComputerTurn = false;
+            enableBoard();
             resultMessage.textContent = message;
-            gameBoard.style.display = 'none';
-            gameResult.style.display = 'flex';
+            
+            setTimeout(() => {
+                gameBoard.style.display = 'none';
+                gameResult.style.display = 'flex';
+            }, 700);
         }
 
         // Tic Tac Toe Event Listeners
@@ -862,6 +995,7 @@
             gameActive = true;
             currentPlayer = 'X';
             boardState = ['', '', '', '', '', '', '', '', ''];
+            isComputerTurn = false;
             modeSelection.style.display = 'none';
             gameBoard.style.display = 'flex';
             gameResult.style.display = 'none';
@@ -871,22 +1005,34 @@
                 cell.className = 'cell';
             });
             
+            // Remove any existing winning lines
+            document.querySelectorAll('.winning-line').forEach(line => line.remove());
+            
+            enableBoard();
             updateGameStatus();
         }
         
         cells.forEach(cell => {
             cell.addEventListener('click', function() {
+                if (isComputerTurn || !gameActive) return;
+                
                 const index = parseInt(this.getAttribute('data-index'));
                 
-                if (boardState[index] !== '' || !gameActive) return;
+                if (boardState[index] !== '') return;
                 
                 makeMove(index, currentPlayer);
                 
-                if (checkWin()) {
-                    endGame(`${gameMode === '1-player' && currentPlayer === 'X' ? 'You win!' : 'Player ' + currentPlayer + ' wins!'}`);
+                const winningCombo = checkWin();
+                if (winningCombo) {
+                    drawWinningLine(winningCombo, currentPlayer);
+                    setTimeout(() => {
+                        endGame(`${gameMode === '1-player' && currentPlayer === 'X' ? 'You win!' : 'Player ' + currentPlayer + ' wins!'}`);
+                    }, 700);
                     return;
                 } else if (checkTie()) {
-                    endGame('Game ended in a tie!');
+                    setTimeout(() => {
+                        endGame('Game ended in a tie!');
+                    }, 700);
                     return;
                 }
                 
@@ -894,7 +1040,7 @@
                 updateGameStatus();
                 
                 if (gameMode === '1-player' && currentPlayer === 'O' && gameActive) {
-                    setTimeout(makeComputerMove, 500);
+                    makeComputerMove();
                 }
             });
         });
