@@ -3,16 +3,13 @@ import { Highlightable } from './highlightable.js';
 
 export class Button extends Highlightable {
     constructor(x, y, width, height, text, onClick, options = {}) {
-        // Call parent constructor FIRST
         const centeredX = x - width / 2;
         const centeredY = y - height / 2;
         super(centeredX, centeredY, width, height, onClick);
         
-        // THEN set our properties (overriding parent defaults)
         this.text = text;
         this.originalX = x;
         
-        // Override the parent's defaults with our button styling
         this.backgroundColor = options.backgroundColor || '#0f0';
         this.hoverColor = options.hoverColor || '#0c0';
         this.textColor = options.textColor || '#000';
@@ -24,24 +21,20 @@ export class Button extends Highlightable {
     draw(ctx) {
         if (!this.isVisible) return;
         
-        // Draw button background with hover effect
         ctx.fillStyle = this.isHovered ? this.hoverColor : this.backgroundColor;
         
-        // Draw with optional rounded corners
         if (this.borderRadius > 0) {
             this.drawRoundedRect(ctx, this.bounds.x, this.bounds.y, this.bounds.width, this.bounds.height, this.borderRadius);
         } else {
             ctx.fillRect(this.bounds.x, this.bounds.y, this.bounds.width, this.bounds.height);
         }
         
-        // Draw button text (centered)
         ctx.fillStyle = this.textColor;
         ctx.font = this.font;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillText(this.text, this.originalX, this.bounds.y + this.bounds.height / 2);
         
-        // Draw border
         ctx.strokeStyle = this.borderColor;
         ctx.lineWidth = 2;
         if (this.borderRadius > 0) {
