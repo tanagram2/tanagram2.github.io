@@ -1,4 +1,3 @@
-// /js/system/interactive-element.js
 export class InteractiveElement {
     constructor(x, y, width, height) {
         this.bounds = { x, y, width, height };
@@ -26,10 +25,6 @@ export class InteractiveElement {
             return true;
         }
         return false;
-    }
-    
-    handleKeyDown(event) {
-        // To be implemented by subclasses
     }
     
     gainFocus() {
