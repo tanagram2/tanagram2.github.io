@@ -1,4 +1,4 @@
-// /js/main.js - SIMPLIFIED WITH IMPORTS
+// /js/main.js - ALL CORE IMPORTS
 import { InteractiveElement } from './system/interactive-element.js';
 import { Highlightable } from './system/highlightable.js';
 import { TextElement } from './system/text-element.js';
@@ -11,7 +11,10 @@ class MartianOS {
         this.canvas = document.getElementById('martian-canvas');
         this.ctx = this.canvas.getContext('2d');
         this.currentScreen = 'matrix';
+        this.showPowerMenu = false;
+        this.showPowerSubmenu = false;
         this.buttons = [];
+        this.menuItems = [];
         this.mouseX = 0;
         this.mouseY = 0;
         
@@ -43,6 +46,7 @@ class MartianOS {
         this.mouseY = e.clientY - rect.top;
         
         this.buttons.forEach(button => button.handleMouseMove(this.mouseX, this.mouseY));
+        this.menuItems.forEach(item => item.handleMouseMove(this.mouseX, this.mouseY));
     }
 
     handleClick(e) {
@@ -50,15 +54,34 @@ class MartianOS {
         const x = e.clientX - rect.left;
         const y = e.clientY - rect.top;
 
+        for (let item of this.menuItems) {
+            if (item.handleClick(x, y)) {
+                return;
+            }
+        }
+
         for (let button of this.buttons) {
             if (button.handleClick(x, y)) {
                 return;
+            }
+        }
+
+        if (this.currentScreen === 'desktop') {
+            if (this.isInPowerButton(x, y)) {
+                this.showPowerMenu = !this.showPowerMenu;
+                this.showPowerSubmenu = false;
+                this.createUI();
+            } else if (this.showPowerMenu && !this.isInPowerMenuArea(x, y)) {
+                this.showPowerMenu = false;
+                this.showPowerSubmenu = false;
+                this.createUI();
             }
         }
     }
 
     createUI() {
         this.buttons = [];
+        this.menuItems = [];
         
         const centerX = this.canvas.width / 2;
         const centerY = this.canvas.height / 2;
@@ -113,15 +136,62 @@ class MartianOS {
     }
 
     createDesktopUI() {
-        // SIMPLE M button - no menu functionality
+        // Green M button at RIGHT side of taskbar
         const powerButton = new TaskbarButton(
-            10, 5, 40, 30, 'M',
+            this.canvas.width - 50, 5, 40, 30, 'M',
             () => { 
-                console.log('M button clicked - no menu yet');
-                // No menu functionality for now
+                this.showPowerMenu = !this.showPowerMenu; 
+                this.showPowerSubmenu = false;
+                this.createUI(); 
             }
         );
         this.buttons.push(powerButton);
+
+        if (this.showPowerMenu) {
+            const profileItem = new MenuItem(
+                this.canvas.width - 140, 40, 120, 25, 'Profile',
+                () => { }
+            );
+            
+            const settingsItem = new MenuItem(
+                this.canvas.width - 140, 65, 120, 25, 'Settings...',
+                () => { }
+            );
+            
+            const powerItem = new MenuItem(
+                this.canvas.width - 140, 90, 120, 25, 'Power',
+                () => { 
+                    this.showPowerSubmenu = !this.showPowerSubmenu; 
+                    this.createUI(); 
+                }
+            );
+            
+            this.menuItems.push(profileItem, settingsItem, powerItem);
+
+            if (this.showPowerSubmenu) {
+                const restartItem = new MenuItem(
+                    this.canvas.width - 260, 90, 100, 25, 'Restart',
+                    () => { 
+                        this.currentScreen = 'os'; 
+                        this.showPowerMenu = false;
+                        this.showPowerSubmenu = false;
+                        this.createUI(); 
+                    }
+                );
+                
+                const shutdownItem = new MenuItem(
+                    this.canvas.width - 260, 115, 100, 25, 'Shut Down',
+                    () => { 
+                        this.currentScreen = 'matrix'; 
+                        this.showPowerMenu = false;
+                        this.showPowerSubmenu = false;
+                        this.createUI(); 
+                    }
+                );
+                
+                this.menuItems.push(restartItem, shutdownItem);
+            }
+        }
     }
 
     animate(currentTime = 0) {
@@ -149,6 +219,7 @@ class MartianOS {
         }
 
         this.buttons.forEach(button => button.draw(this.ctx));
+        this.menuItems.forEach(item => item.draw(this.ctx));
     }
 
     renderMatrixScreen() {
@@ -182,11 +253,36 @@ class MartianOS {
         this.ctx.fillStyle = '#9e9e9e';
         this.ctx.fillRect(0, 0, this.canvas.width, 40);
 
+        // Clock on LEFT side (moved from right)
         this.ctx.fillStyle = '#000';
         this.ctx.font = '0.9rem Courier New';
         const now = new Date();
         const time = now.toLocaleTimeString();
-        this.ctx.fillText(time, this.canvas.width - 100, 25);
+        this.ctx.fillText(time, 100, 25);
+
+        if (this.showPowerMenu) {
+            this.ctx.fillStyle = '#e0e0e0';
+            this.ctx.fillRect(this.canvas.width - 140, 40, 130, 80);
+            
+            if (this.showPowerSubmenu) {
+                this.ctx.fillStyle = '#e0e0e0';
+                this.ctx.fillRect(this.canvas.width - 260, 90, 100, 50);
+            }
+        }
+    }
+
+    isInPowerButton(x, y) {
+        return x > this.canvas.width - 50 && x < this.canvas.width - 10 && y > 5 && y < 35;
+    }
+
+    isInPowerMenuArea(x, y) {
+        if (!this.showPowerMenu) return false;
+        
+        if (x >= this.canvas.width - 140 && x <= this.canvas.width - 10 && y >= 40 && y <= 120) return true;
+        
+        if (this.showPowerSubmenu && x >= this.canvas.width - 260 && x <= this.canvas.width - 160 && y >= 90 && y <= 140) return true;
+        
+        return false;
     }
 }
 
