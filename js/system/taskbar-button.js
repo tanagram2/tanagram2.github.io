@@ -3,22 +3,20 @@ import { Button } from './button.js';
 
 export class TaskbarButton extends Button {
     constructor(x, y, width, height, text, onClick, options = {}) {
-        // Properly call parent constructor FIRST
-        const centerX = x + width / 2;
-        const centerY = y + height / 2;
-        
-        // Pass ALL options to parent
-        super(centerX, centerY, width, height, text, onClick, {
-            backgroundColor: '#00f',        // BLUE background
-            hoverColor: '#0000cc',          // Darker blue
-            textColor: '#f00',              // RED text  
+        const taskbarOptions = {
+            backgroundColor: 'transparent',
+            hoverColor: 'rgba(255, 255, 255, 0.2)',
+            textColor: '#0f0',
             borderRadius: 5,
             font: '1.2rem Courier New',
             borderColor: '#000',
             ...options
-        });
+        };
         
-        // THEN set our specific properties
+        const centerX = x + width / 2;
+        const centerY = y + height / 2;
+        super(centerX, centerY, width, height, text, onClick, taskbarOptions);
+        
         this.bounds.x = x;
         this.bounds.y = y;
         this.originalX = x + width / 2;
@@ -27,23 +25,22 @@ export class TaskbarButton extends Button {
     draw(ctx) {
         if (!this.isVisible) return;
         
-        // Draw background (should be BLUE)
-        ctx.fillStyle = this.isHovered ? this.hoverColor : this.backgroundColor;
-        if (this.borderRadius > 0) {
-            this.drawRoundedRect(ctx, this.bounds.x, this.bounds.y, this.bounds.width, this.bounds.height, this.borderRadius);
-            ctx.fill();
-        } else {
-            ctx.fillRect(this.bounds.x, this.bounds.y, this.bounds.width, this.bounds.height);
+        if (this.isHovered) {
+            ctx.fillStyle = this.hoverColor;
+            if (this.borderRadius > 0) {
+                this.drawRoundedRect(ctx, this.bounds.x, this.bounds.y, this.bounds.width, this.bounds.height, this.borderRadius);
+                ctx.fill();
+            } else {
+                ctx.fillRect(this.bounds.x, this.bounds.y, this.bounds.width, this.bounds.height);
+            }
         }
         
-        // Draw text (should be RED)
         ctx.fillStyle = this.textColor;
         ctx.font = this.font;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillText(this.text, this.originalX, this.bounds.y + this.bounds.height / 2);
         
-        // Draw border (should be BLACK)
         ctx.strokeStyle = this.borderColor;
         ctx.lineWidth = 2;
         if (this.borderRadius > 0) {
