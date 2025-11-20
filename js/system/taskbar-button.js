@@ -3,14 +3,13 @@ import { Button } from './button.js';
 
 export class TaskbarButton extends Button {
     constructor(x, y, width, height, text, onClick, options = {}) {
-        // NO BACKGROUND - transparent button sitting on taskbar
         const taskbarOptions = {
-            backgroundColor: 'transparent',  // No background!
-            hoverColor: 'rgba(255, 255, 255, 0.2)', // Subtle hover effect
-            textColor: '#0f0',               // Green text
+            backgroundColor: 'transparent',
+            hoverColor: 'rgba(255, 255, 255, 0.2)',
+            textColor: '#0f0',
             borderRadius: 5,
             font: '1.2rem Courier New',
-            borderColor: '#000',             // Black border
+            borderColor: '#000',
             ...options
         };
         
@@ -26,7 +25,6 @@ export class TaskbarButton extends Button {
     draw(ctx) {
         if (!this.isVisible) return;
         
-        // Only draw background on hover (subtle highlight)
         if (this.isHovered) {
             ctx.fillStyle = this.hoverColor;
             if (this.borderRadius > 0) {
@@ -36,14 +34,12 @@ export class TaskbarButton extends Button {
             }
         }
         
-        // Draw the green text
         ctx.fillStyle = this.textColor;
         ctx.font = this.font;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillText(this.text, this.originalX, this.bounds.y + this.bounds.height / 2);
         
-        // Draw black border
         ctx.strokeStyle = this.borderColor;
         ctx.lineWidth = 2;
         if (this.borderRadius > 0) {
