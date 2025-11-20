@@ -1,3 +1,4 @@
+// /js/system/menu-item.js
 import { Button } from './button.js';
 
 export class MenuItem extends Button {
