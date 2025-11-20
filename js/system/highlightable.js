@@ -1,9 +1,11 @@
+// /js/system/highlightable.js
 import { InteractiveElement } from './interactive-element.js';
 
 export class Highlightable extends InteractiveElement {
     constructor(x, y, width, height, onClick) {
         super(x, y, width, height);
         this.onClick = onClick;
+        // Set defaults that can be overridden by subclasses
         this.backgroundColor = '#fff';
         this.hoverColor = '#ccc';
         this.borderColor = '#666';
