@@ -1,6 +1,10 @@
 // /js/main.js - SIMPLIFIED WITH IMPORTS
+import { InteractiveElement } from './system/interactive-element.js';
+import { Highlightable } from './system/highlightable.js';
+import { TextElement } from './system/text-element.js';
 import { Button } from './system/button.js';
 import { TaskbarButton } from './system/taskbar-button.js';
+import { MenuItem } from './system/menu-item.js';
 
 class MartianOS {
     constructor() {
