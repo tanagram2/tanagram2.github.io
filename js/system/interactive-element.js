@@ -1,3 +1,4 @@
+// /js/system/interactive-element.js
 export class InteractiveElement {
     constructor(x, y, width, height) {
         this.bounds = { x, y, width, height };
