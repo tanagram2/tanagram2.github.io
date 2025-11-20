@@ -131,6 +131,7 @@ class MartianOS {
     }
 
     createDesktopUI() {
+        // Taskbar M button - positioned at top-left of taskbar
         const powerButton = new TaskbarButton(
             10, 5, 40, 30, 'M',
             () => { 
@@ -194,6 +195,7 @@ class MartianOS {
     }
 
     render() {
+        // Clear canvas
         this.ctx.fillStyle = '#000';
         this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
 
@@ -241,18 +243,22 @@ class MartianOS {
     }
 
     renderDesktopScreen() {
+        // Blue desktop background
         this.ctx.fillStyle = '#1a237e';
         this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
 
+        // Gray taskbar
         this.ctx.fillStyle = '#9e9e9e';
         this.ctx.fillRect(0, 0, this.canvas.width, 40);
 
+        // Clock
         this.ctx.fillStyle = '#000';
         this.ctx.font = '0.9rem Courier New';
         const now = new Date();
         const time = now.toLocaleTimeString();
         this.ctx.fillText(time, this.canvas.width - 100, 25);
 
+        // Power menu background
         if (this.showPowerMenu) {
             this.ctx.fillStyle = '#e0e0e0';
             this.ctx.fillRect(10, 40, 130, 80);
