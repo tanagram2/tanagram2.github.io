@@ -1,4 +1,4 @@
-// /js/main.js - SIMPLIFIED WORKING VERSION
+// /js/main.js
 import { Button, TaskbarButton, MenuItem } from './system/index.js';
 
 class MartianOS {
@@ -11,6 +11,7 @@ class MartianOS {
         this.showPowerMenu = false;
         this.showPowerSubmenu = false;
         this.buttons = [];
+        this.menuItems = []; // Separate menu items from buttons
         this.mouseX = 0;
         this.mouseY = 0;
         
@@ -43,7 +44,9 @@ class MartianOS {
         this.mouseX = e.clientX - rect.left;
         this.mouseY = e.clientY - rect.top;
         
+        // Update hover states
         this.buttons.forEach(button => button.handleMouseMove(this.mouseX, this.mouseY));
+        this.menuItems.forEach(item => item.handleMouseMove(this.mouseX, this.mouseY));
     }
 
     handleClick(e) {
@@ -51,18 +54,33 @@ class MartianOS {
         const x = e.clientX - rect.left;
         const y = e.clientY - rect.top;
 
-        for (let button of this.buttons) {
-            if (button.handleClick(x, y)) {
+        console.log(`Click at: ${x}, ${y}`);
+
+        // Check menu items first (they're on top)
+        for (let item of this.menuItems) {
+            if (item.handleClick(x, y)) {
+                console.log('Menu item handled click');
                 return;
             }
         }
 
+        // Check regular buttons
+        for (let button of this.buttons) {
+            if (button.handleClick(x, y)) {
+                console.log('Button handled click');
+                return;
+            }
+        }
+
+        // Handle desktop clicks (outside menus)
         if (this.currentScreen === 'desktop') {
             if (this.isInPowerButton(x, y)) {
+                console.log('Power button clicked');
                 this.showPowerMenu = !this.showPowerMenu;
                 this.showPowerSubmenu = false;
                 this.createUI();
             } else if (this.showPowerMenu && !this.isInPowerMenuArea(x, y)) {
+                console.log('Click outside menu - closing');
                 this.showPowerMenu = false;
                 this.showPowerSubmenu = false;
                 this.createUI();
@@ -71,7 +89,10 @@ class MartianOS {
     }
 
     createUI() {
+        console.log(`Creating UI for screen: ${this.currentScreen}`);
         this.buttons = [];
+        this.menuItems = [];
+        
         const centerX = this.canvas.width / 2;
         const centerY = this.canvas.height / 2;
 
@@ -89,17 +110,27 @@ class MartianOS {
                 this.createDesktopUI();
                 break;
         }
+        
+        console.log(`Created ${this.buttons.length} buttons and ${this.menuItems.length} menu items`);
     }
 
     createMatrixUI(centerX, centerY) {
         const aboutButton = new Button(
             centerX, centerY + 45, 200, 50, 'About Me',
-            () => { this.currentScreen = 'about'; this.createUI(); }
+            () => { 
+                console.log('About Me clicked');
+                this.currentScreen = 'about'; 
+                this.createUI(); 
+            }
         );
         
         const enterButton = new Button(
             centerX, centerY + 115, 200, 50, 'ENTER',
-            () => { this.currentScreen = 'os'; this.createUI(); }
+            () => { 
+                console.log('ENTER clicked');
+                this.currentScreen = 'os'; 
+                this.createUI(); 
+            }
         );
         
         this.buttons.push(aboutButton, enterButton);
@@ -108,7 +139,11 @@ class MartianOS {
     createAboutUI(centerX, centerY) {
         const backButton = new Button(
             centerX, centerY + 125, 200, 50, 'Back',
-            () => { this.currentScreen = 'matrix'; this.createUI(); }
+            () => { 
+                console.log('Back clicked');
+                this.currentScreen = 'matrix'; 
+                this.createUI(); 
+            }
         );
         
         this.buttons.push(backButton);
@@ -117,7 +152,11 @@ class MartianOS {
     createOSUI(centerX, centerY) {
         const startButton = new Button(
             centerX, centerY + 75, 200, 50, 'START',
-            () => { this.currentScreen = 'desktop'; this.createUI(); },
+            () => { 
+                console.log('START clicked');
+                this.currentScreen = 'desktop'; 
+                this.createUI(); 
+            },
             { backgroundColor: '#000', textColor: '#fff' }
         );
         
@@ -125,10 +164,13 @@ class MartianOS {
     }
 
     createDesktopUI() {
-        // Taskbar M button
+        console.log('Creating desktop UI');
+        
+        // Taskbar M button - use TaskbarButton which should have proper styling
         const powerButton = new TaskbarButton(
             10, 5, 40, 30, 'M',
             () => { 
+                console.log('M button clicked');
                 this.showPowerMenu = !this.showPowerMenu; 
                 this.showPowerSubmenu = false;
                 this.createUI(); 
@@ -136,30 +178,39 @@ class MartianOS {
         );
         this.buttons.push(powerButton);
 
-        // Power menu
+        // Power menu items (only when menu is open)
         if (this.showPowerMenu) {
+            console.log('Creating power menu');
+            
             const profileItem = new MenuItem(
                 10, 40, 120, 25, 'Profile',
-                () => { /* Placeholder */ }
+                () => { console.log('Profile clicked'); }
             );
             
             const settingsItem = new MenuItem(
                 10, 65, 120, 25, 'Settings...',
-                () => { /* Placeholder */ }
+                () => { console.log('Settings clicked'); }
             );
             
             const powerItem = new MenuItem(
                 10, 90, 120, 25, 'Power',
-                () => { this.showPowerSubmenu = !this.showPowerSubmenu; this.createUI(); }
+                () => { 
+                    console.log('Power clicked - toggling submenu');
+                    this.showPowerSubmenu = !this.showPowerSubmenu; 
+                    this.createUI(); 
+                }
             );
             
-            this.buttons.push(profileItem, settingsItem, powerItem);
+            this.menuItems.push(profileItem, settingsItem, powerItem);
 
-            // Power submenu
+            // Power submenu items
             if (this.showPowerSubmenu) {
+                console.log('Creating power submenu');
+                
                 const restartItem = new MenuItem(
                     130, 90, 100, 25, 'Restart',
                     () => { 
+                        console.log('Restart clicked');
                         this.currentScreen = 'os'; 
                         this.showPowerMenu = false;
                         this.showPowerSubmenu = false;
@@ -170,6 +221,7 @@ class MartianOS {
                 const shutdownItem = new MenuItem(
                     130, 115, 100, 25, 'Shut Down',
                     () => { 
+                        console.log('Shutdown clicked');
                         this.currentScreen = 'matrix'; 
                         this.showPowerMenu = false;
                         this.showPowerSubmenu = false;
@@ -177,7 +229,7 @@ class MartianOS {
                     }
                 );
                 
-                this.buttons.push(restartItem, shutdownItem);
+                this.menuItems.push(restartItem, shutdownItem);
             }
         }
     }
@@ -192,7 +244,7 @@ class MartianOS {
         this.ctx.fillStyle = '#000';
         this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
 
-        // Render current screen
+        // Render current screen background
         switch (this.currentScreen) {
             case 'matrix':
                 this.renderMatrixScreen();
@@ -208,8 +260,18 @@ class MartianOS {
                 break;
         }
 
-        // Render all buttons
-        this.buttons.forEach(button => button.draw(this.ctx));
+        // Render all UI elements
+        this.buttons.forEach(button => {
+            if (button.draw) {
+                button.draw(this.ctx);
+            }
+        });
+        
+        this.menuItems.forEach(item => {
+            if (item.draw) {
+                item.draw(this.ctx);
+            }
+        });
     }
 
     renderMatrixScreen() {
@@ -237,17 +299,32 @@ class MartianOS {
     }
 
     renderDesktopScreen() {
+        // Blue desktop background
         this.ctx.fillStyle = '#1a237e';
         this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
 
+        // Taskbar (gray bar at top)
         this.ctx.fillStyle = '#9e9e9e';
         this.ctx.fillRect(0, 0, this.canvas.width, 40);
 
+        // Clock
         this.ctx.fillStyle = '#000';
         this.ctx.font = '0.9rem Courier New';
         const now = new Date();
         const time = now.toLocaleTimeString();
         this.ctx.fillText(time, this.canvas.width - 100, 25);
+
+        // Power menu background (if open)
+        if (this.showPowerMenu) {
+            this.ctx.fillStyle = '#e0e0e0';
+            this.ctx.fillRect(10, 40, 130, 80);
+            
+            // Power submenu background (if open)
+            if (this.showPowerSubmenu) {
+                this.ctx.fillStyle = '#e0e0e0';
+                this.ctx.fillRect(130, 90, 100, 50);
+            }
+        }
     }
 
     isInPowerButton(x, y) {
@@ -258,7 +335,7 @@ class MartianOS {
         if (!this.showPowerMenu) return false;
         
         // Main menu area
-        if (x >= 10 && x <= 130 && y >= 40 && y <= 115) return true;
+        if (x >= 10 && x <= 140 && y >= 40 && y <= 120) return true;
         
         // Submenu area if open
         if (this.showPowerSubmenu && x >= 130 && x <= 230 && y >= 90 && y <= 140) return true;
@@ -267,7 +344,8 @@ class MartianOS {
     }
 }
 
-// Initialize
+// Initialize MartianOS when page loads
 document.addEventListener('DOMContentLoaded', () => {
+    console.log('DOM loaded - starting MartianOS');
     new MartianOS();
 });
