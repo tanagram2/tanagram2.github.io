@@ -4,12 +4,12 @@ import { Button } from './button.js';
 export class TaskbarButton extends Button {
     constructor(x, y, width, height, text, onClick, options = {}) {
         const taskbarOptions = {
-            backgroundColor: 'transparent',
-            hoverColor: 'rgba(255, 255, 255, 0.2)',
-            textColor: '#0f0',
+            backgroundColor: 'transparent',  // No background
+            hoverColor: 'rgba(255, 255, 255, 0.2)', // Light hover
+            textColor: '#f00',               // RED text so we can see it
             borderRadius: 5,
             font: '1.2rem Courier New',
-            borderColor: '#000',
+            borderColor: '#000',             // Black border
             ...options
         };
         
@@ -25,21 +25,25 @@ export class TaskbarButton extends Button {
     draw(ctx) {
         if (!this.isVisible) return;
         
+        // Only draw background on hover
         if (this.isHovered) {
-            ctx.fillStyle = this.hoverColor;
+            ctx.fillStyle = this.hoverColor; // Use hover color, not background color
             if (this.borderRadius > 0) {
                 this.drawRoundedRect(ctx, this.bounds.x, this.bounds.y, this.bounds.width, this.bounds.height, this.borderRadius);
+                ctx.fill();
             } else {
                 ctx.fillRect(this.bounds.x, this.bounds.y, this.bounds.width, this.bounds.height);
             }
         }
         
-        ctx.fillStyle = this.textColor;
+        // Draw the text
+        ctx.fillStyle = this.textColor; // RED text
         ctx.font = this.font;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillText(this.text, this.originalX, this.bounds.y + this.bounds.height / 2);
         
+        // Draw border
         ctx.strokeStyle = this.borderColor;
         ctx.lineWidth = 2;
         if (this.borderRadius > 0) {
