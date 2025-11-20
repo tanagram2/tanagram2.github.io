@@ -1,5 +1,5 @@
 // /js/button.js
-class Button {
+export class Button {
     constructor(x, y, width, height, text, onClick, options = {}) {
         this.x = x;
         this.y = y;
@@ -8,7 +8,6 @@ class Button {
         this.text = text;
         this.onClick = onClick;
         
-        // Default styling
         this.backgroundColor = options.backgroundColor || '#0f0';
         this.textColor = options.textColor || '#000';
         this.hoverColor = options.hoverColor || '#0c0';
@@ -37,11 +36,9 @@ class Button {
     }
 
     draw(ctx) {
-        // Draw button background
         ctx.fillStyle = this.isHovered ? this.hoverColor : this.backgroundColor;
         ctx.fillRect(this.x - this.width / 2, this.y - this.height / 2, this.width, this.height);
         
-        // Draw button text
         ctx.fillStyle = this.textColor;
         ctx.font = this.font;
         ctx.textAlign = 'center';
