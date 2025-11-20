@@ -3,20 +3,22 @@ import { Button } from './button.js';
 
 export class TaskbarButton extends Button {
     constructor(x, y, width, height, text, onClick, options = {}) {
-        const taskbarOptions = {
-            backgroundColor: '#00f',        // BLUE background
-            hoverColor: '#0000cc',          // Darker blue on hover
-            textColor: '#f00',              // RED text
-            borderRadius: 5,
-            font: '1.2rem Courier New',
-            borderColor: '#000',            // Black border
-            ...options
-        };
-        
+        // Properly call parent constructor FIRST
         const centerX = x + width / 2;
         const centerY = y + height / 2;
-        super(centerX, centerY, width, height, text, onClick, taskbarOptions);
         
+        // Pass ALL options to parent
+        super(centerX, centerY, width, height, text, onClick, {
+            backgroundColor: '#00f',        // BLUE background
+            hoverColor: '#0000cc',          // Darker blue
+            textColor: '#f00',              // RED text  
+            borderRadius: 5,
+            font: '1.2rem Courier New',
+            borderColor: '#000',
+            ...options
+        });
+        
+        // THEN set our specific properties
         this.bounds.x = x;
         this.bounds.y = y;
         this.originalX = x + width / 2;
@@ -24,12 +26,6 @@ export class TaskbarButton extends Button {
 
     draw(ctx) {
         if (!this.isVisible) return;
-        
-        console.log('TaskbarButton draw called - colors:', {
-            background: this.backgroundColor,
-            text: this.textColor,
-            hover: this.hoverColor
-        });
         
         // Draw background (should be BLUE)
         ctx.fillStyle = this.isHovered ? this.hoverColor : this.backgroundColor;
