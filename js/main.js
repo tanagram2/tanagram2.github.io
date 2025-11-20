@@ -1,10 +1,8 @@
-// /js/main.js - DIAGNOSTIC VERSION
+// /js/main.js
 import { Button, TaskbarButton, MenuItem } from './system/index.js';
 
 class MartianOS {
     constructor() {
-        console.log('MartianOS: Starting diagnostic version...');
-        
         this.canvas = document.getElementById('martian-canvas');
         this.ctx = this.canvas.getContext('2d');
         this.currentScreen = 'matrix';
@@ -14,7 +12,6 @@ class MartianOS {
         this.menuItems = [];
         this.mouseX = 0;
         this.mouseY = 0;
-        this.frameCount = 0;
         
         this.setupCanvas();
         this.setupEventListeners();
@@ -22,92 +19,184 @@ class MartianOS {
         this.createUI();
     }
 
-    // ... (setupCanvas, setupEventListeners, handleMouseMove remain the same) ...
+    setupCanvas() {
+        this.resizeCanvas();
+        window.addEventListener('resize', () => this.resizeCanvas());
+    }
+
+    resizeCanvas() {
+        this.canvas.width = window.innerWidth;
+        this.canvas.height = window.innerHeight;
+        this.createUI();
+    }
+
+    setupEventListeners() {
+        this.canvas.addEventListener('click', (e) => this.handleClick(e));
+        this.canvas.addEventListener('mousemove', (e) => this.handleMouseMove(e));
+    }
+
+    handleMouseMove(e) {
+        const rect = this.canvas.getBoundingClientRect();
+        this.mouseX = e.clientX - rect.left;
+        this.mouseY = e.clientY - rect.top;
+        
+        this.buttons.forEach(button => button.handleMouseMove(this.mouseX, this.mouseY));
+        this.menuItems.forEach(item => item.handleMouseMove(this.mouseX, this.mouseY));
+    }
 
     handleClick(e) {
         const rect = this.canvas.getBoundingClientRect();
         const x = e.clientX - rect.left;
         const y = e.clientY - rect.top;
 
-        console.log(`=== CLICK DEBUG ===`);
-        console.log(`Click at: ${x}, ${y}`);
-        console.log(`Current screen: ${this.currentScreen}`);
-        console.log(`Show power menu: ${this.showPowerMenu}`);
-        console.log(`Buttons count: ${this.buttons.length}`);
-        console.log(`Menu items count: ${this.menuItems.length}`);
+        for (let item of this.menuItems) {
+            if (item.handleClick(x, y)) {
+                return;
+            }
+        }
 
-        // Log all button bounds for debugging
-        this.buttons.forEach((button, index) => {
-            console.log(`Button ${index}:`, button.bounds);
-        });
+        for (let button of this.buttons) {
+            if (button.handleClick(x, y)) {
+                return;
+            }
+        }
 
-        // ... (rest of handleClick remains the same) ...
+        if (this.currentScreen === 'desktop') {
+            if (this.isInPowerButton(x, y)) {
+                this.showPowerMenu = !this.showPowerMenu;
+                this.showPowerSubmenu = false;
+                this.createUI();
+            } else if (this.showPowerMenu && !this.isInPowerMenuArea(x, y)) {
+                this.showPowerMenu = false;
+                this.showPowerSubmenu = false;
+                this.createUI();
+            }
+        }
+    }
+
+    createUI() {
+        this.buttons = [];
+        this.menuItems = [];
+        
+        const centerX = this.canvas.width / 2;
+        const centerY = this.canvas.height / 2;
+
+        switch (this.currentScreen) {
+            case 'matrix':
+                this.createMatrixUI(centerX, centerY);
+                break;
+            case 'about':
+                this.createAboutUI(centerX, centerY);
+                break;
+            case 'os':
+                this.createOSUI(centerX, centerY);
+                break;
+            case 'desktop':
+                this.createDesktopUI();
+                break;
+        }
+    }
+
+    createMatrixUI(centerX, centerY) {
+        const aboutButton = new Button(
+            centerX, centerY + 45, 200, 50, 'About Me',
+            () => { this.currentScreen = 'about'; this.createUI(); }
+        );
+        
+        const enterButton = new Button(
+            centerX, centerY + 115, 200, 50, 'ENTER',
+            () => { this.currentScreen = 'os'; this.createUI(); }
+        );
+        
+        this.buttons.push(aboutButton, enterButton);
+    }
+
+    createAboutUI(centerX, centerY) {
+        const backButton = new Button(
+            centerX, centerY + 125, 200, 50, 'Back',
+            () => { this.currentScreen = 'matrix'; this.createUI(); }
+        );
+        
+        this.buttons.push(backButton);
+    }
+
+    createOSUI(centerX, centerY) {
+        const startButton = new Button(
+            centerX, centerY + 75, 200, 50, 'START',
+            () => { this.currentScreen = 'desktop'; this.createUI(); },
+            { backgroundColor: '#000', textColor: '#fff' }
+        );
+        
+        this.buttons.push(startButton);
     }
 
     createDesktopUI() {
-        console.log('=== CREATING DESKTOP UI ===');
-        
-        // Taskbar M button - let's test with a regular Button first
-        console.log('Creating power button...');
         const powerButton = new TaskbarButton(
             10, 5, 40, 30, 'M',
             () => { 
-                console.log('M button clicked - current state:', this.showPowerMenu);
                 this.showPowerMenu = !this.showPowerMenu; 
                 this.showPowerSubmenu = false;
                 this.createUI(); 
             }
         );
-        
-        console.log('Power button created:', {
-            bounds: powerButton.bounds,
-            backgroundColor: powerButton.backgroundColor,
-            textColor: powerButton.textColor
-        });
-        
         this.buttons.push(powerButton);
 
-        // ... (rest of createDesktopUI remains the same) ...
+        if (this.showPowerMenu) {
+            const profileItem = new MenuItem(
+                10, 40, 120, 25, 'Profile',
+                () => { }
+            );
+            
+            const settingsItem = new MenuItem(
+                10, 65, 120, 25, 'Settings...',
+                () => { }
+            );
+            
+            const powerItem = new MenuItem(
+                10, 90, 120, 25, 'Power',
+                () => { 
+                    this.showPowerSubmenu = !this.showPowerSubmenu; 
+                    this.createUI(); 
+                }
+            );
+            
+            this.menuItems.push(profileItem, settingsItem, powerItem);
+
+            if (this.showPowerSubmenu) {
+                const restartItem = new MenuItem(
+                    130, 90, 100, 25, 'Restart',
+                    () => { 
+                        this.currentScreen = 'os'; 
+                        this.showPowerMenu = false;
+                        this.showPowerSubmenu = false;
+                        this.createUI(); 
+                    }
+                );
+                
+                const shutdownItem = new MenuItem(
+                    130, 115, 100, 25, 'Shut Down',
+                    () => { 
+                        this.currentScreen = 'matrix'; 
+                        this.showPowerMenu = false;
+                        this.showPowerSubmenu = false;
+                        this.createUI(); 
+                    }
+                );
+                
+                this.menuItems.push(restartItem, shutdownItem);
+            }
+        }
     }
 
     animate(currentTime = 0) {
         requestAnimationFrame((time) => this.animate(time));
         this.render();
-        this.frameCount++;
-        
-        // Log every 60 frames to avoid console spam
-        if (this.frameCount % 60 === 0 && this.currentScreen === 'desktop') {
-            console.log(`=== FRAME ${this.frameCount} DEBUG ===`);
-            console.log('Rendering desktop with:', {
-                buttons: this.buttons.length,
-                menuItems: this.menuItems.length,
-                showPowerMenu: this.showPowerMenu
-            });
-        }
     }
 
     render() {
-        // Clear canvas with a subtle grid for debugging
         this.ctx.fillStyle = '#000';
         this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
-        
-        // Draw subtle grid for coordinate debugging
-        this.ctx.strokeStyle = '#222';
-        this.ctx.lineWidth = 1;
-        for (let x = 0; x < this.canvas.width; x += 50) {
-            this.ctx.beginPath();
-            this.ctx.moveTo(x, 0);
-            this.ctx.lineTo(x, this.canvas.height);
-            this.ctx.stroke();
-        }
-        for (let y = 0; y < this.canvas.height; y += 50) {
-            this.ctx.beginPath();
-            this.ctx.moveTo(0, y);
-            this.ctx.lineTo(this.canvas.width, y);
-            this.ctx.stroke();
-        }
 
-        // Render current screen background
         switch (this.currentScreen) {
             case 'matrix':
                 this.renderMatrixScreen();
@@ -123,33 +212,71 @@ class MartianOS {
                 break;
         }
 
-        // Render debug info for buttons
-        this.buttons.forEach((button, index) => {
-            if (button.draw) {
-                console.log(`Drawing button ${index}:`, button.bounds);
-                button.draw(this.ctx);
-                
-                // Draw debug outline
-                this.ctx.strokeStyle = '#f00';
-                this.ctx.lineWidth = 2;
-                this.ctx.strokeRect(button.bounds.x, button.bounds.y, button.bounds.width, button.bounds.height);
-                
-                // Draw debug text
-                this.ctx.fillStyle = '#f00';
-                this.ctx.font = '8px Arial';
-                this.ctx.fillText(`Btn${index}`, button.bounds.x, button.bounds.y - 5);
-            }
-        });
-        
-        this.menuItems.forEach((item, index) => {
-            if (item.draw) {
-                console.log(`Drawing menu item ${index}:`, item.bounds);
-                item.draw(this.ctx);
-            }
-        });
+        this.buttons.forEach(button => button.draw(this.ctx));
+        this.menuItems.forEach(item => item.draw(this.ctx));
     }
 
-    // ... (rest of the methods remain the same) ...
+    renderMatrixScreen() {
+        this.ctx.fillStyle = '#0f0';
+        this.ctx.font = '2.5rem Courier New';
+        this.ctx.textAlign = 'center';
+        this.ctx.fillText('MartianMatrix', this.canvas.width / 2, this.canvas.height / 2 - 50);
+    }
+
+    renderAboutScreen() {
+        this.ctx.fillStyle = '#0f0';
+        this.ctx.font = '2.5rem Courier New';
+        this.ctx.textAlign = 'center';
+        this.ctx.fillText('About Me', this.canvas.width / 2, this.canvas.height / 2 - 80);
+
+        this.ctx.font = '1rem Courier New';
+        this.ctx.fillText('This is placeholder text all about me (Mars).', this.canvas.width / 2, this.canvas.height / 2);
+    }
+
+    renderOSScreen() {
+        this.ctx.fillStyle = '#fff';
+        this.ctx.font = '3rem Courier New';
+        this.ctx.textAlign = 'center';
+        this.ctx.fillText('MartianOS', this.canvas.width / 2, this.canvas.height / 2 - 50);
+    }
+
+    renderDesktopScreen() {
+        this.ctx.fillStyle = '#1a237e';
+        this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+
+        this.ctx.fillStyle = '#9e9e9e';
+        this.ctx.fillRect(0, 0, this.canvas.width, 40);
+
+        this.ctx.fillStyle = '#000';
+        this.ctx.font = '0.9rem Courier New';
+        const now = new Date();
+        const time = now.toLocaleTimeString();
+        this.ctx.fillText(time, this.canvas.width - 100, 25);
+
+        if (this.showPowerMenu) {
+            this.ctx.fillStyle = '#e0e0e0';
+            this.ctx.fillRect(10, 40, 130, 80);
+            
+            if (this.showPowerSubmenu) {
+                this.ctx.fillStyle = '#e0e0e0';
+                this.ctx.fillRect(130, 90, 100, 50);
+            }
+        }
+    }
+
+    isInPowerButton(x, y) {
+        return x > 10 && x < 50 && y > 5 && y < 35;
+    }
+
+    isInPowerMenuArea(x, y) {
+        if (!this.showPowerMenu) return false;
+        
+        if (x >= 10 && x <= 140 && y >= 40 && y <= 120) return true;
+        
+        if (this.showPowerSubmenu && x >= 130 && x <= 230 && y >= 90 && y <= 140) return true;
+        
+        return false;
+    }
 }
 
 document.addEventListener('DOMContentLoaded', () => {
