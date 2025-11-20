@@ -1,36 +1,28 @@
-// /js/main.js - DEBUG VERSION
-import { Button, TaskbarButton, MenuItem, FocusManager } from './system/index.js';
+// /js/main.js - SIMPLIFIED WORKING VERSION
+import { Button, TaskbarButton, MenuItem } from './system/index.js';
 
 class MartianOS {
     constructor() {
-        console.log('MartianOS: Constructor started');
+        console.log('MartianOS: Starting...');
         
-        try {
-            // Simple setup - skip complex systems for now
-            this.canvas = document.getElementById('martian-canvas');
-            this.ctx = this.canvas.getContext('2d');
-            console.log('MartianOS: Canvas setup complete');
-            
-            this.currentScreen = 'matrix';
-            this.showPowerMenu = false;
-            this.showPowerSubmenu = false;
-            this.buttons = [];
-            this.mouseX = 0;
-            this.mouseY = 0;
-            
-            this.setupCanvas();
-            this.setupEventListeners();
-            this.animate();
-            this.createUI();
-            
-            console.log('MartianOS: Initialization complete');
-        } catch (error) {
-            console.error('MartianOS: Initialization failed:', error);
-        }
+        this.canvas = document.getElementById('martian-canvas');
+        this.ctx = this.canvas.getContext('2d');
+        this.currentScreen = 'matrix';
+        this.showPowerMenu = false;
+        this.showPowerSubmenu = false;
+        this.buttons = [];
+        this.mouseX = 0;
+        this.mouseY = 0;
+        
+        this.setupCanvas();
+        this.setupEventListeners();
+        this.animate();
+        this.createUI();
+        
+        console.log('MartianOS: Ready!');
     }
 
     setupCanvas() {
-        console.log('MartianOS: Setting up canvas');
         this.resizeCanvas();
         window.addEventListener('resize', () => this.resizeCanvas());
     }
@@ -38,12 +30,10 @@ class MartianOS {
     resizeCanvas() {
         this.canvas.width = window.innerWidth;
         this.canvas.height = window.innerHeight;
-        console.log(`MartianOS: Canvas resized to ${this.canvas.width}x${this.canvas.height}`);
         this.createUI();
     }
 
     setupEventListeners() {
-        console.log('MartianOS: Setting up event listeners');
         this.canvas.addEventListener('click', (e) => this.handleClick(e));
         this.canvas.addEventListener('mousemove', (e) => this.handleMouseMove(e));
     }
@@ -53,22 +43,16 @@ class MartianOS {
         this.mouseX = e.clientX - rect.left;
         this.mouseY = e.clientY - rect.top;
         
-        this.buttons.forEach(button => {
-            if (button.handleMouseMove) {
-                button.handleMouseMove(this.mouseX, this.mouseY);
-            }
-        });
+        this.buttons.forEach(button => button.handleMouseMove(this.mouseX, this.mouseY));
     }
 
     handleClick(e) {
-        console.log('MartianOS: Click detected');
         const rect = this.canvas.getBoundingClientRect();
         const x = e.clientX - rect.left;
         const y = e.clientY - rect.top;
 
         for (let button of this.buttons) {
-            if (button.handleClick && button.handleClick(x, y)) {
-                console.log('MartianOS: Button handled click');
+            if (button.handleClick(x, y)) {
                 return;
             }
         }
@@ -87,9 +71,7 @@ class MartianOS {
     }
 
     createUI() {
-        console.log(`MartianOS: Creating UI for screen: ${this.currentScreen}`);
         this.buttons = [];
-        
         const centerX = this.canvas.width / 2;
         const centerY = this.canvas.height / 2;
 
@@ -107,61 +89,35 @@ class MartianOS {
                 this.createDesktopUI();
                 break;
         }
-        
-        console.log(`MartianOS: Created ${this.buttons.length} buttons`);
     }
 
     createMatrixUI(centerX, centerY) {
-        console.log('MartianOS: Creating Matrix UI');
-        try {
-            const aboutButton = new Button(
-                centerX, centerY + 45, 200, 50, 'About Me',
-                () => { 
-                    console.log('About Me clicked');
-                    this.currentScreen = 'about'; 
-                    this.createUI(); 
-                }
-            );
-            
-            const enterButton = new Button(
-                centerX, centerY + 115, 200, 50, 'ENTER',
-                () => { 
-                    console.log('ENTER clicked');
-                    this.currentScreen = 'os'; 
-                    this.createUI(); 
-                }
-            );
-            
-            this.buttons.push(aboutButton, enterButton);
-            console.log('MartianOS: Matrix UI created successfully');
-        } catch (error) {
-            console.error('MartianOS: Error creating Matrix UI:', error);
-        }
+        const aboutButton = new Button(
+            centerX, centerY + 45, 200, 50, 'About Me',
+            () => { this.currentScreen = 'about'; this.createUI(); }
+        );
+        
+        const enterButton = new Button(
+            centerX, centerY + 115, 200, 50, 'ENTER',
+            () => { this.currentScreen = 'os'; this.createUI(); }
+        );
+        
+        this.buttons.push(aboutButton, enterButton);
     }
 
     createAboutUI(centerX, centerY) {
-        console.log('MartianOS: Creating About UI');
         const backButton = new Button(
             centerX, centerY + 125, 200, 50, 'Back',
-            () => { 
-                console.log('Back clicked');
-                this.currentScreen = 'matrix'; 
-                this.createUI(); 
-            }
+            () => { this.currentScreen = 'matrix'; this.createUI(); }
         );
         
         this.buttons.push(backButton);
     }
 
     createOSUI(centerX, centerY) {
-        console.log('MartianOS: Creating OS UI');
         const startButton = new Button(
             centerX, centerY + 75, 200, 50, 'START',
-            () => { 
-                console.log('START clicked');
-                this.currentScreen = 'desktop'; 
-                this.createUI(); 
-            },
+            () => { this.currentScreen = 'desktop'; this.createUI(); },
             { backgroundColor: '#000', textColor: '#fff' }
         );
         
@@ -169,51 +125,61 @@ class MartianOS {
     }
 
     createDesktopUI() {
-        console.log('MartianOS: Creating Desktop UI');
-        // Simple taskbar button without complex systems
-        const powerButton = {
-            bounds: { x: 10, y: 5, width: 40, height: 30 },
-            text: 'M',
-            isHovered: false,
-            
-            containsPoint(x, y) {
-                return x >= this.bounds.x && x <= this.bounds.x + this.bounds.width &&
-                       y >= this.bounds.y && y <= this.bounds.y + this.bounds.height;
-            },
-            
-            handleMouseMove(x, y) {
-                this.isHovered = this.containsPoint(x, y);
-            },
-            
-            handleClick(x, y) {
-                if (this.containsPoint(x, y)) {
-                    console.log('Power button clicked');
-                    this.showPowerMenu = !this.showPowerMenu;
-                    return true;
-                }
-                return false;
-            },
-            
-            draw(ctx) {
-                // Draw button background
-                ctx.fillStyle = this.isHovered ? '#bdbdbd' : '#9e9e9e';
-                ctx.fillRect(this.bounds.x, this.bounds.y, this.bounds.width, this.bounds.height);
-                
-                // Draw border
-                ctx.strokeStyle = '#666';
-                ctx.lineWidth = 2;
-                ctx.strokeRect(this.bounds.x, this.bounds.y, this.bounds.width, this.bounds.height);
-                
-                // Draw text
-                ctx.fillStyle = '#000';
-                ctx.font = '1.2rem Courier New';
-                ctx.textAlign = 'center';
-                ctx.textBaseline = 'middle';
-                ctx.fillText(this.text, this.bounds.x + this.bounds.width / 2, this.bounds.y + this.bounds.height / 2);
+        // Taskbar M button
+        const powerButton = new TaskbarButton(
+            10, 5, 40, 30, 'M',
+            () => { 
+                this.showPowerMenu = !this.showPowerMenu; 
+                this.showPowerSubmenu = false;
+                this.createUI(); 
             }
-        };
-        
+        );
         this.buttons.push(powerButton);
+
+        // Power menu
+        if (this.showPowerMenu) {
+            const profileItem = new MenuItem(
+                10, 40, 120, 25, 'Profile',
+                () => { /* Placeholder */ }
+            );
+            
+            const settingsItem = new MenuItem(
+                10, 65, 120, 25, 'Settings...',
+                () => { /* Placeholder */ }
+            );
+            
+            const powerItem = new MenuItem(
+                10, 90, 120, 25, 'Power',
+                () => { this.showPowerSubmenu = !this.showPowerSubmenu; this.createUI(); }
+            );
+            
+            this.buttons.push(profileItem, settingsItem, powerItem);
+
+            // Power submenu
+            if (this.showPowerSubmenu) {
+                const restartItem = new MenuItem(
+                    130, 90, 100, 25, 'Restart',
+                    () => { 
+                        this.currentScreen = 'os'; 
+                        this.showPowerMenu = false;
+                        this.showPowerSubmenu = false;
+                        this.createUI(); 
+                    }
+                );
+                
+                const shutdownItem = new MenuItem(
+                    130, 115, 100, 25, 'Shut Down',
+                    () => { 
+                        this.currentScreen = 'matrix'; 
+                        this.showPowerMenu = false;
+                        this.showPowerSubmenu = false;
+                        this.createUI(); 
+                    }
+                );
+                
+                this.buttons.push(restartItem, shutdownItem);
+            }
+        }
     }
 
     animate(currentTime = 0) {
@@ -222,39 +188,28 @@ class MartianOS {
     }
 
     render() {
-        console.log('MartianOS: Rendering frame');
-        try {
-            // Clear canvas
-            this.ctx.fillStyle = '#000';
-            this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+        // Clear canvas
+        this.ctx.fillStyle = '#000';
+        this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
 
-            // Render current screen
-            switch (this.currentScreen) {
-                case 'matrix':
-                    this.renderMatrixScreen();
-                    break;
-                case 'about':
-                    this.renderAboutScreen();
-                    break;
-                case 'os':
-                    this.renderOSScreen();
-                    break;
-                case 'desktop':
-                    this.renderDesktopScreen();
-                    break;
-            }
-
-            // Render all buttons
-            this.buttons.forEach(button => {
-                if (button.draw) {
-                    button.draw(this.ctx);
-                }
-            });
-            
-            console.log('MartianOS: Frame rendered successfully');
-        } catch (error) {
-            console.error('MartianOS: Error rendering frame:', error);
+        // Render current screen
+        switch (this.currentScreen) {
+            case 'matrix':
+                this.renderMatrixScreen();
+                break;
+            case 'about':
+                this.renderAboutScreen();
+                break;
+            case 'os':
+                this.renderOSScreen();
+                break;
+            case 'desktop':
+                this.renderDesktopScreen();
+                break;
         }
+
+        // Render all buttons
+        this.buttons.forEach(button => button.draw(this.ctx));
     }
 
     renderMatrixScreen() {
@@ -301,12 +256,18 @@ class MartianOS {
 
     isInPowerMenuArea(x, y) {
         if (!this.showPowerMenu) return false;
-        return x >= 10 && x <= 130 && y >= 40 && y <= 115;
+        
+        // Main menu area
+        if (x >= 10 && x <= 130 && y >= 40 && y <= 115) return true;
+        
+        // Submenu area if open
+        if (this.showPowerSubmenu && x >= 130 && x <= 230 && y >= 90 && y <= 140) return true;
+        
+        return false;
     }
 }
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
-    console.log('DOM loaded - starting MartianOS');
     new MartianOS();
 });
