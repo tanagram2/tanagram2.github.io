@@ -194,9 +194,11 @@ class MartianOS {
     }
 
     render() {
+        // Clear canvas
         this.ctx.fillStyle = '#000';
         this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
 
+        // Render current screen background
         switch (this.currentScreen) {
             case 'matrix':
                 this.renderMatrixScreen();
@@ -212,8 +214,18 @@ class MartianOS {
                 break;
         }
 
-        this.buttons.forEach(button => button.draw(this.ctx));
-        this.menuItems.forEach(item => item.draw(this.ctx));
+        // Render UI elements in correct order
+        this.buttons.forEach(button => {
+            if (button && typeof button.draw === 'function') {
+                button.draw(this.ctx);
+            }
+        });
+        
+        this.menuItems.forEach(item => {
+            if (item && typeof item.draw === 'function') {
+                item.draw(this.ctx);
+            }
+        });
     }
 
     renderMatrixScreen() {
