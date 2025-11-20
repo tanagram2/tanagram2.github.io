@@ -7,7 +7,6 @@ export class InteractiveElement {
         this.isDisabled = false;
         this.isVisible = true;
         this.zIndex = 0;
-        this.parent = null;
     }
     
     containsPoint(x, y) {
