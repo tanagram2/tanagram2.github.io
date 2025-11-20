@@ -10,31 +10,73 @@ export class Button extends Highlightable {
         this.text = text;
         this.originalX = x;
         
-        this.backgroundColor = options.backgroundColor || '#0f0';
-        this.hoverColor = options.hoverColor || '#0c0';
-        this.textColor = options.textColor || '#000';
-        this.font = options.font || '1.2rem Courier New';
-        this.borderRadius = options.borderRadius || 0;
-        this.borderColor = options.borderColor || '#666';
+        // Theme-aware styling
+        this.theme = options.theme || null;
+        this.backgroundColor = options.backgroundColor || this.getThemeColor('ui.button');
+        this.hoverColor = options.hoverColor || this.getThemeColor('ui.buttonHover');
+        this.activeColor = options.activeColor || this.getThemeColor('ui.buttonActive');
+        this.textColor = options.textColor || this.getThemeColor('text.primary');
+        this.font = options.font || this.getThemeFont('normal');
+        this.borderRadius = options.borderRadius || this.getThemeBorderRadius('md');
+        this.borderColor = options.borderColor || this.getThemeColor('primary');
+        
+        this.isActive = false;
+        this.activeTimeout = null;
+    }
+
+    getThemeColor(path) {
+        if (this.theme) {
+            return this.theme.getColor(path);
+        }
+        // Fallback colors
+        const fallbacks = {
+            'ui.button': '#0f0',
+            'ui.buttonHover': '#0c0',
+            'ui.buttonActive': '#090',
+            'text.primary': '#000',
+            'primary': '#666'
+        };
+        return fallbacks[path] || '#000';
+    }
+
+    getThemeFont(size) {
+        if (this.theme) {
+            return this.theme.getFont(size);
+        }
+        return '1.2rem Courier New';
+    }
+
+    getThemeBorderRadius(size) {
+        if (this.theme) {
+            return this.theme.getBorderRadius(size);
+        }
+        return 5;
     }
 
     draw(ctx) {
         if (!this.isVisible) return;
         
-        ctx.fillStyle = this.isHovered ? this.hoverColor : this.backgroundColor;
+        // Use active color if button is being clicked
+        const bgColor = this.isActive ? this.activeColor : 
+                       this.isHovered ? this.hoverColor : this.backgroundColor;
         
+        ctx.fillStyle = bgColor;
+        
+        // Draw with rounded corners
         if (this.borderRadius > 0) {
             this.drawRoundedRect(ctx, this.bounds.x, this.bounds.y, this.bounds.width, this.bounds.height, this.borderRadius);
         } else {
             ctx.fillRect(this.bounds.x, this.bounds.y, this.bounds.width, this.bounds.height);
         }
         
+        // Draw text
         ctx.fillStyle = this.textColor;
         ctx.font = this.font;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillText(this.text, this.originalX, this.bounds.y + this.bounds.height / 2);
         
+        // Draw border
         ctx.strokeStyle = this.borderColor;
         ctx.lineWidth = 2;
         if (this.borderRadius > 0) {
@@ -58,5 +100,29 @@ export class Button extends Highlightable {
         ctx.quadraticCurveTo(x, y, x + radius, y);
         ctx.closePath();
         ctx.fill();
+    }
+
+    handleClick(x, y) {
+        if (super.handleClick(x, y)) {
+            // Visual feedback for click
+            this.isActive = true;
+            if (this.activeTimeout) clearTimeout(this.activeTimeout);
+            this.activeTimeout = setTimeout(() => {
+                this.isActive = false;
+            }, 150);
+            
+            return true;
+        }
+        return false;
+    }
+
+    setTheme(theme) {
+        this.theme = theme;
+        // Update colors to use new theme
+        this.backgroundColor = this.getThemeColor('ui.button');
+        this.hoverColor = this.getThemeColor('ui.buttonHover');
+        this.activeColor = this.getThemeColor('ui.buttonActive');
+        this.textColor = this.getThemeColor('text.primary');
+        this.font = this.getThemeFont('normal');
     }
 }
