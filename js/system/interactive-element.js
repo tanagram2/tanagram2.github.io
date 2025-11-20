@@ -1,4 +1,4 @@
-// /js/interactive-element.js
+// /js/system/interactive-element.js
 export class InteractiveElement {
     constructor(x, y, width, height) {
         this.bounds = { x, y, width, height };
@@ -42,7 +42,6 @@ export class InteractiveElement {
     }
     
     draw(ctx) {
-        // To be implemented by subclasses
         throw new Error('draw method must be implemented by subclass');
     }
 }
