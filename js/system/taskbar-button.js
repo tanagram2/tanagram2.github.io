@@ -1,33 +1,56 @@
-// /js/system/taskbar-button.js - FIXED VERSION
+// /js/system/taskbar-button.js
 import { Button } from './button.js';
 
 export class TaskbarButton extends Button {
     constructor(x, y, width, height, text, onClick, options = {}) {
-        // Merge our taskbar defaults with any provided options
+        // NO BACKGROUND - transparent button sitting on taskbar
         const taskbarOptions = {
-            backgroundColor: '#9e9e9e',  // Gray background
-            hoverColor: '#bdbdbd',       // Lighter gray on hover  
-            textColor: '#0f0',           // GREEN text
+            backgroundColor: 'transparent',  // No background!
+            hoverColor: 'rgba(255, 255, 255, 0.2)', // Subtle hover effect
+            textColor: '#0f0',               // Green text
             borderRadius: 5,
             font: '1.2rem Courier New',
-            borderColor: '#000',         // Black border
+            borderColor: '#000',             // Black border
             ...options
         };
         
-        // Call parent constructor with merged options
-        super(x + width / 2, y + height / 2, width, height, text, onClick, taskbarOptions);
+        const centerX = x + width / 2;
+        const centerY = y + height / 2;
+        super(centerX, centerY, width, height, text, onClick, taskbarOptions);
         
-        // Adjust positioning
         this.bounds.x = x;
         this.bounds.y = y;
         this.originalX = x + width / 2;
+    }
+
+    draw(ctx) {
+        if (!this.isVisible) return;
         
-        // DEBUG: Log what colors we actually have
-        console.log('TaskbarButton colors:', {
-            bg: this.backgroundColor,
-            hover: this.hoverColor, 
-            text: this.textColor,
-            border: this.borderColor
-        });
+        // Only draw background on hover (subtle highlight)
+        if (this.isHovered) {
+            ctx.fillStyle = this.hoverColor;
+            if (this.borderRadius > 0) {
+                this.drawRoundedRect(ctx, this.bounds.x, this.bounds.y, this.bounds.width, this.bounds.height, this.borderRadius);
+            } else {
+                ctx.fillRect(this.bounds.x, this.bounds.y, this.bounds.width, this.bounds.height);
+            }
+        }
+        
+        // Draw the green text
+        ctx.fillStyle = this.textColor;
+        ctx.font = this.font;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(this.text, this.originalX, this.bounds.y + this.bounds.height / 2);
+        
+        // Draw black border
+        ctx.strokeStyle = this.borderColor;
+        ctx.lineWidth = 2;
+        if (this.borderRadius > 0) {
+            this.drawRoundedRect(ctx, this.bounds.x, this.bounds.y, this.bounds.width, this.bounds.height, this.borderRadius);
+            ctx.stroke();
+        } else {
+            ctx.strokeRect(this.bounds.x, this.bounds.y, this.bounds.width, this.bounds.height);
+        }
     }
 }
