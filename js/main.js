@@ -1,291 +1,176 @@
-// /js/main.js - ALL CORE IMPORTS
-import { InteractiveElement } from './system/interactive-element.js';
-import { Highlightable } from './system/highlightable.js';
-import { TextElement } from './system/text-element.js';
-import { Button } from './system/button.js';
-import { TaskbarButton } from './system/taskbar-button.js';
-import { MenuItem } from './system/menu-item.js';
+import { EventManager } from './system/EventManager.js';
+import { RenderManager } from './system/RenderManager.js';
+import { ZIndexManager } from './system/ZIndexManager.js';
+import { InteractiveManager } from './system/InteractiveManager.js';
+import { Rect } from './system/Rect.js';
+import { RoundedRect } from './system/RoundedRect.js';
 
 class MartianOS {
     constructor() {
         this.canvas = document.getElementById('martian-canvas');
         this.ctx = this.canvas.getContext('2d');
-        this.currentScreen = 'matrix';
-        this.showPowerMenu = false;
-        this.showPowerSubmenu = false;
-        this.buttons = [];
-        this.menuItems = [];
-        this.mouseX = 0;
-        this.mouseY = 0;
         
-        this.setupCanvas();
-        this.setupEventListeners();
-        this.animate();
-        this.createUI();
-    }
-
-    setupCanvas() {
+        // Initialize core systems
+        this.eventManager = new EventManager(this.canvas);
+        this.zIndexManager = new ZIndexManager();
+        this.interactiveManager = new InteractiveManager(this.eventManager, this.zIndexManager);
+        this.renderManager = new RenderManager(this.ctx);
+        
+        // Initialize properties first
+        this.loadingComplete = false;
+        this.loadingProgressValue = 0;
+        this.loadingBarBg = null;
+        this.loadingProgress = null;
+        this.testSquare = null;
+        this.yellowSquare = null;
+        
+        // Create background first (before any methods that use it)
+        this.background = new Rect(0, 0, this.canvas.width, this.canvas.height, '#000000');
+        
+        // Set canvas size and setup loading screen
         this.resizeCanvas();
         window.addEventListener('resize', () => this.resizeCanvas());
+        this.setupLoadingScreen();
+        
+        this.animate();
     }
-
+    
     resizeCanvas() {
         this.canvas.width = window.innerWidth;
         this.canvas.height = window.innerHeight;
-        this.createUI();
-    }
-
-    setupEventListeners() {
-        this.canvas.addEventListener('click', (e) => this.handleClick(e));
-        this.canvas.addEventListener('mousemove', (e) => this.handleMouseMove(e));
-    }
-
-    handleMouseMove(e) {
-        const rect = this.canvas.getBoundingClientRect();
-        this.mouseX = e.clientX - rect.left;
-        this.mouseY = e.clientY - rect.top;
         
-        this.buttons.forEach(button => button.handleMouseMove(this.mouseX, this.mouseY));
-        this.menuItems.forEach(item => item.handleMouseMove(this.mouseX, this.mouseY));
-    }
-
-    handleClick(e) {
-        const rect = this.canvas.getBoundingClientRect();
-        const x = e.clientX - rect.left;
-        const y = e.clientY - rect.top;
-
-        for (let item of this.menuItems) {
-            if (item.handleClick(x, y)) {
-                return;
-            }
+        // Update background to fill entire canvas
+        if (this.background) {
+            this.background.width = this.canvas.width;
+            this.background.height = this.canvas.height;
         }
-
-        for (let button of this.buttons) {
-            if (button.handleClick(x, y)) {
-                return;
-            }
-        }
-
-        if (this.currentScreen === 'desktop') {
-            if (this.isInPowerButton(x, y)) {
-                this.showPowerMenu = !this.showPowerMenu;
-                this.showPowerSubmenu = false;
-                this.createUI();
-            } else if (this.showPowerMenu && !this.isInPowerMenuArea(x, y)) {
-                this.showPowerMenu = false;
-                this.showPowerSubmenu = false;
-                this.createUI();
-            }
-        }
-    }
-
-    createUI() {
-        this.buttons = [];
-        this.menuItems = [];
         
-        const centerX = this.canvas.width / 2;
-        const centerY = this.canvas.height / 2;
-
-        switch (this.currentScreen) {
-            case 'matrix':
-                this.createMatrixUI(centerX, centerY);
-                break;
-            case 'about':
-                this.createAboutUI(centerX, centerY);
-                break;
-            case 'os':
-                this.createOSUI(centerX, centerY);
-                break;
-            case 'desktop':
-                this.createDesktopUI();
-                break;
-        }
-    }
-
-    createMatrixUI(centerX, centerY) {
-        const aboutButton = new Button(
-            centerX, centerY + 45, 200, 50, 'About Me',
-            () => { this.currentScreen = 'about'; this.createUI(); }
-        );
-        
-        const enterButton = new Button(
-            centerX, centerY + 115, 200, 50, 'ENTER',
-            () => { this.currentScreen = 'os'; this.createUI(); }
-        );
-        
-        this.buttons.push(aboutButton, enterButton);
-    }
-
-    createAboutUI(centerX, centerY) {
-        const backButton = new Button(
-            centerX, centerY + 125, 200, 50, 'Back',
-            () => { this.currentScreen = 'matrix'; this.createUI(); }
-        );
-        
-        this.buttons.push(backButton);
-    }
-
-    createOSUI(centerX, centerY) {
-        const startButton = new Button(
-            centerX, centerY + 75, 200, 50, 'START',
-            () => { this.currentScreen = 'desktop'; this.createUI(); },
-            { backgroundColor: '#000', textColor: '#fff' }
-        );
-        
-        this.buttons.push(startButton);
-    }
-
-    createDesktopUI() {
-        // Green M button at RIGHT side of taskbar
-        const powerButton = new TaskbarButton(
-            this.canvas.width - 50, 5, 40, 30, 'M',
-            () => { 
-                this.showPowerMenu = !this.showPowerMenu; 
-                this.showPowerSubmenu = false;
-                this.createUI(); 
-            }
-        );
-        this.buttons.push(powerButton);
-
-        if (this.showPowerMenu) {
-            const profileItem = new MenuItem(
-                this.canvas.width - 140, 40, 120, 25, 'Profile',
-                () => { }
-            );
+        // Update loading bar dimensions (relative to canvas size)
+        if (this.loadingBarBg && this.loadingProgress) {
+            const margin = this.canvas.width * 0.3; // 30% margin
+            const barWidth = this.canvas.width * 0.4; // 40% of screen width
+            const barHeight = this.canvas.height * 0.02; // 2% of screen height
+            const barY = this.canvas.height * 0.5; // 50% from top
             
-            const settingsItem = new MenuItem(
-                this.canvas.width - 140, 65, 120, 25, 'Settings...',
-                () => { }
-            );
+            this.loadingBarBg.x = margin;
+            this.loadingBarBg.y = barY - barHeight / 2;
+            this.loadingBarBg.width = barWidth;
+            this.loadingBarBg.height = barHeight;
             
-            const powerItem = new MenuItem(
-                this.canvas.width - 140, 90, 120, 25, 'Power',
-                () => { 
-                    this.showPowerSubmenu = !this.showPowerSubmenu; 
-                    this.createUI(); 
-                }
-            );
+            this.loadingProgress.x = margin;
+            this.loadingProgress.y = barY - barHeight / 2;
+            this.loadingProgress.height = barHeight;
+            // Width updates during loading animation
+        }
+        
+        // Update squares positions and sizes (relative to canvas size)
+        if (this.testSquare && this.yellowSquare) {
+            const squareSize = Math.min(this.canvas.width, this.canvas.height) * 0.1; // 10% of smaller dimension
+            const gap = squareSize * 0.2; // 20% of square size as gap
+            const totalWidth = squareSize * 2 + gap;
+            const x1 = (this.canvas.width - totalWidth) / 2;
+            const y = (this.canvas.height - squareSize) / 2;
+            const x2 = x1 + squareSize + gap;
             
-            this.menuItems.push(profileItem, settingsItem, powerItem);
-
-            if (this.showPowerSubmenu) {
-                const restartItem = new MenuItem(
-                    this.canvas.width - 260, 90, 100, 25, 'Restart',
-                    () => { 
-                        this.currentScreen = 'os'; 
-                        this.showPowerMenu = false;
-                        this.showPowerSubmenu = false;
-                        this.createUI(); 
-                    }
-                );
-                
-                const shutdownItem = new MenuItem(
-                    this.canvas.width - 260, 115, 100, 25, 'Shut Down',
-                    () => { 
-                        this.currentScreen = 'matrix'; 
-                        this.showPowerMenu = false;
-                        this.showPowerSubmenu = false;
-                        this.createUI(); 
-                    }
-                );
-                
-                this.menuItems.push(restartItem, shutdownItem);
+            this.testSquare.x = x1;
+            this.testSquare.y = y;
+            this.testSquare.width = squareSize;
+            this.testSquare.height = squareSize;
+            
+            this.yellowSquare.x = x2;
+            this.yellowSquare.y = y;
+            this.yellowSquare.width = squareSize;
+            this.yellowSquare.height = squareSize;
+        }
+        
+        this.renderManager.markDirty();
+    }
+    
+    setupLoadingScreen() {
+        // Add background
+        this.renderManager.add(this.background, 'background');
+        
+        // Create loading bar with relative dimensions
+        const margin = this.canvas.width * 0.3;
+        const barWidth = this.canvas.width * 0.4;
+        const barHeight = this.canvas.height * 0.02;
+        const barY = this.canvas.height * 0.5;
+        
+        this.loadingBarBg = new Rect(margin, barY - barHeight / 2, barWidth, barHeight, '#333');
+        this.loadingProgress = new Rect(margin, barY - barHeight / 2, 0, barHeight, '#ffffff');
+        
+        this.renderManager.add(this.loadingBarBg, 'ui');
+        this.renderManager.add(this.loadingProgress, 'ui');
+        
+        // Set max loading progress to match bar width
+        this.maxLoadingWidth = barWidth;
+    }
+    
+    setupDesktop() {
+        // Remove loading elements
+        this.renderManager.remove(this.loadingBarBg, 'ui');
+        this.renderManager.remove(this.loadingProgress, 'ui');
+        
+        // Clear references
+        this.loadingBarBg = null;
+        this.loadingProgress = null;
+        
+        // Create squares with relative sizes
+        const squareSize = Math.min(this.canvas.width, this.canvas.height) * 0.1;
+        const gap = squareSize * 0.2;
+        const totalWidth = squareSize * 2 + gap;
+        const x1 = (this.canvas.width - totalWidth) / 2;
+        const y = (this.canvas.height - squareSize) / 2;
+        
+        this.testSquare = new RoundedRect(x1, y, squareSize, squareSize, squareSize * 0.15, '#ff0000');
+        this.testSquare.handleClick = () => {
+            if (this.testSquare.color === '#ff0000') {
+                this.testSquare.color = '#00ff00';
+            } else if (this.testSquare.color === '#00ff00') {
+                this.testSquare.color = '#0000ff';
+            } else {
+                this.testSquare.color = '#ff0000';
             }
-        }
-    }
-
-    animate(currentTime = 0) {
-        requestAnimationFrame((time) => this.animate(time));
-        this.render();
-    }
-
-    render() {
-        this.ctx.fillStyle = '#000';
-        this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
-
-        switch (this.currentScreen) {
-            case 'matrix':
-                this.renderMatrixScreen();
-                break;
-            case 'about':
-                this.renderAboutScreen();
-                break;
-            case 'os':
-                this.renderOSScreen();
-                break;
-            case 'desktop':
-                this.renderDesktopScreen();
-                break;
-        }
-
-        this.buttons.forEach(button => button.draw(this.ctx));
-        this.menuItems.forEach(item => item.draw(this.ctx));
-    }
-
-    renderMatrixScreen() {
-        this.ctx.fillStyle = '#0f0';
-        this.ctx.font = '2.5rem Courier New';
-        this.ctx.textAlign = 'center';
-        this.ctx.fillText('MartianMatrix', this.canvas.width / 2, this.canvas.height / 2 - 50);
-    }
-
-    renderAboutScreen() {
-        this.ctx.fillStyle = '#0f0';
-        this.ctx.font = '2.5rem Courier New';
-        this.ctx.textAlign = 'center';
-        this.ctx.fillText('About Me', this.canvas.width / 2, this.canvas.height / 2 - 80);
-
-        this.ctx.font = '1rem Courier New';
-        this.ctx.fillText('This is placeholder text all about me (Mars).', this.canvas.width / 2, this.canvas.height / 2);
-    }
-
-    renderOSScreen() {
-        this.ctx.fillStyle = '#fff';
-        this.ctx.font = '3rem Courier New';
-        this.ctx.textAlign = 'center';
-        this.ctx.fillText('MartianOS', this.canvas.width / 2, this.canvas.height / 2 - 50);
-    }
-
-    renderDesktopScreen() {
-        this.ctx.fillStyle = '#1a237e';
-        this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
-
-        this.ctx.fillStyle = '#9e9e9e';
-        this.ctx.fillRect(0, 0, this.canvas.width, 40);
-
-        // Clock on LEFT side (moved from right)
-        this.ctx.fillStyle = '#000';
-        this.ctx.font = '0.9rem Courier New';
-        const now = new Date();
-        const time = now.toLocaleTimeString();
-        this.ctx.fillText(time, 100, 25);
-
-        if (this.showPowerMenu) {
-            this.ctx.fillStyle = '#e0e0e0';
-            this.ctx.fillRect(this.canvas.width - 140, 40, 130, 80);
-            
-            if (this.showPowerSubmenu) {
-                this.ctx.fillStyle = '#e0e0e0';
-                this.ctx.fillRect(this.canvas.width - 260, 90, 100, 50);
-            }
-        }
-    }
-
-    isInPowerButton(x, y) {
-        return x > this.canvas.width - 50 && x < this.canvas.width - 10 && y > 5 && y < 35;
-    }
-
-    isInPowerMenuArea(x, y) {
-        if (!this.showPowerMenu) return false;
+            this.renderManager.markDirty();
+        };
         
-        if (x >= this.canvas.width - 140 && x <= this.canvas.width - 10 && y >= 40 && y <= 120) return true;
+        const x2 = x1 + squareSize + gap;
+        this.yellowSquare = new RoundedRect(x2, y, squareSize, squareSize, squareSize * 0.15, '#ffff00');
+        this.yellowSquare.handleClick = () => {
+            console.log('Yellow square clicked!');
+        };
         
-        if (this.showPowerSubmenu && x >= this.canvas.width - 260 && x <= this.canvas.width - 160 && y >= 90 && y <= 140) return true;
+        // Register interactive elements
+        this.interactiveManager.register(this.testSquare);
+        this.interactiveManager.register(this.yellowSquare);
+        this.renderManager.add(this.testSquare, 'ui');
+        this.renderManager.add(this.yellowSquare, 'ui');
         
-        return false;
+        this.loadingComplete = true;
+        this.renderManager.markDirty();
+    }
+    
+    updateLoading() {
+        if (this.loadingComplete) return;
+        
+        this.loadingProgressValue += this.canvas.width * 0.002; // Speed relative to screen width
+        this.loadingProgress.width = this.loadingProgressValue;
+        
+        if (this.loadingProgressValue >= this.maxLoadingWidth) {
+            this.setupDesktop();
+        }
+        
+        this.renderManager.markDirty();
+    }
+    
+    animate() {
+        this.updateLoading();
+        this.renderManager.render();
+        requestAnimationFrame(() => this.animate());
     }
 }
 
-document.addEventListener('DOMContentLoaded', () => {
+// Initialize when the page loads
+window.addEventListener('load', () => {
     new MartianOS();
 });
