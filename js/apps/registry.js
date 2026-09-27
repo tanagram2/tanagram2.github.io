@@ -15,9 +15,11 @@
 import { Calculator } from "./Calculator.js";
 import { TimeClock }  from "./TimeClock.js";
 import { SnakeGame }  from "./SnakeGame.js";
+import { Tetris }     from "./Tetris.js";
 
 export const APPS = [
   Calculator,
   TimeClock,
   SnakeGame,
+  Tetris,
 ];
