@@ -2,9 +2,9 @@
 //
 // Structure: a landing screen (Start / High Scores / Exit), a high
 // scores screen (Return + up to 10 rows), and a play screen (score
-// Label, board Panel, Return top-left, death overlay, pause overlay,
-// mobile-only Pause button, mobile-only Show/Hide Controls button,
-// mobile-only D-pad).
+// Label, board, Return top-left, pause overlay, death overlay,
+// mobile-only Pause button, and a mobile-only controls strip below
+// the board).
 //
 // Movement model: the snake's logical position is a grid of cells.
 // The head advances one cell per tick; between ticks every segment
@@ -12,15 +12,14 @@
 // looks smooth. Turns only take effect at cell boundaries.
 //
 // Board geometry is computed at init() time from Viewport.width and
-// Viewport.height so the same game works on both virtual
-// resolutions. Desktop is 32 x 24 cells; mobile is 22 x 22 cells.
-// Cell size is 25px on both.
+// Viewport.height. Desktop is 32 x 24 cells; mobile is 24 x 32
+// (inverted). Cell size is 25px on both. The board never moves on
+// mobile; only the controls strip below it shows or hides its D-pad.
 //
-// Mobile controls: the D-pad and the Pause button are built at init
-// but the D-pad starts hidden. A "Show Controls" / "Hide Controls"
-// button toggles D-pad visibility and repositions the board between
-// its centered resting spot and a raised spot that leaves room for
-// the pad. Board size does not change.
+// Mobile controls: a controls strip Composite sits below the board
+// containing a Show/Hide Controls toggle and (when shown) a D-pad.
+// The strip is hidden entirely while the death or pause overlay is
+// up so nothing shows through the translucent overlay.
 //
 // Initials entry: on desktop, the physical keyboard is used (the
 // existing keydown path). On mobile, an on-canvas Keyboard composite
@@ -39,6 +38,7 @@ import { Panel }    from "../composites/Panel.js";
 import { Button }   from "../composites/Button.js";
 import { Label }    from "../composites/Label.js";
 import { Keyboard } from "../composites/Keyboard.js";
+import { Composite } from "../composites/Composite.js";
 import { Viewport } from "../systems/Viewport.js";
 
 // Cell size is shared. Board dimensions differ per device.
@@ -114,8 +114,8 @@ export class SnakeGame extends App {
     this._swipeConsumed = false;
 
     // Mobile control pad visibility. Default hidden so the game
-    // opens clean; the toggle button reveals it and raises the
-    // board to make room.
+    // opens clean; the toggle button reveals it. The board never
+    // moves regardless of this state.
     this.controlsVisible = false;
 
     this.landingScreen = this._buildLanding();
@@ -129,21 +129,16 @@ export class SnakeGame extends App {
   }
 
   // Decide board rectangle and grid size from the active virtual box.
-  // Desktop: 800x600 board, 32 x 24 cells (matches the old values).
-  // Mobile:  550x550 board, 22 x 22 cells, offset from top so it can
-  //          shift between centered and raised as controls show/hide.
+  // Desktop: 800x600 board, 32 x 24 cells, fixed at x=240, y=90.
+  // Mobile:  600x800 board, 24 x 32 cells, fixed at y=120.
   _computeLayout() {
     if (Viewport.isMobile) {
-      this._cols    = 22;
-      this._rows    = 22;
+      this._cols    = 24;
+      this._rows    = 32;
       this._boardW  = this._cols * CELL;
       this._boardH  = this._rows * CELL;
       this._boardX  = (Viewport.width - this._boardW) / 2;
-      // Two Y positions. The active one is chosen in
-      // _applyControlsLayout() based on controlsVisible.
-      this._boardYHidden  = 240;
-      this._boardYVisible = 130;
-      this._boardY        = this._boardYHidden;
+      this._boardY  = 120;
     } else {
       this._cols    = 32;
       this._rows    = 24;
@@ -348,24 +343,22 @@ export class SnakeGame extends App {
     });
     screen.add(this.scoreLabel);
 
-    // Board background, wall ring, and playfield. These are created
-    // once and repositioned when the controls toggle moves the board.
-    this.boardBg = new Rect({
+    // Board background, wall ring, and playfield. Fixed positions;
+    // the board does not move.
+    screen.add(new Rect({
       x: this._boardX, y: this._boardY,
       w: this._boardW, h: this._boardH,
       fill: "#3a3a3a",
       stroke: null,
-    });
-    screen.add(this.boardBg);
+    }));
 
-    this.boardWall = new Rect({
+    screen.add(new Rect({
       x: this._boardX + CELL, y: this._boardY + CELL,
       w: this._boardW - CELL * 2,
       h: this._boardH - CELL * 2,
       fill: "#0a120a",
       stroke: null,
-    });
-    screen.add(this.boardWall);
+    }));
 
     this.snakeLayer = new Panel({
       x: this._boardX + CELL,
@@ -392,29 +385,40 @@ export class SnakeGame extends App {
     this.pauseOverlay = this._buildPauseOverlay();
     screen.add(this.pauseOverlay);
 
-    // Mobile-only controls: a Show/Hide Controls toggle just below
-    // the board, and a D-pad below that. Both start hidden; the
-    // toggle button is always visible on mobile. The D-pad is built
-    // now so its geometry is fixed; visibility alone changes.
-    this.controlsToggle = null;
-    this.dpadButtons    = [];
+    // Mobile-only controls strip. Lives below the board, contains
+    // the Show/Hide toggle and (hidden by default) the D-pad. The
+    // whole strip hides while an overlay is up.
+    this.controlsStrip   = null;
+    this.controlsToggle  = null;
+    this.dpadButtons     = [];
 
     if (Viewport.isMobile) {
-      this._buildControlsToggle(screen);
-      this._buildDpad(screen);
-      this._applyControlsLayout();
+      this._buildControlsStrip(screen);
     }
 
     return screen;
   }
 
-  _buildControlsToggle(screen) {
+  // Build the controls strip below the board. Strip top sits a
+  // fixed gap below the board. Inside: the Show/Hide toggle at the
+  // top, and the D-pad below it.
+  _buildControlsStrip(screen) {
+    const stripX = 0;
+    const stripY = this._boardY + this._boardH + 20;
+    const stripW = Viewport.width;
+    const stripH = Viewport.height - stripY;
+
+    this.controlsStrip = new Composite({
+      x: stripX, y: stripY,
+      w: stripW, h: stripH,
+    });
+    screen.add(this.controlsStrip);
+
+    // Toggle button at the top of the strip.
     const btnW = 300;
     const btnH = 56;
-    const btnX = (Viewport.width - btnW) / 2;
-    // Placed just below the board in its raised (controls-visible)
-    // position; that is the spot that reads as "controls live here."
-    const btnY = this._boardYVisible + this._boardH + 20;
+    const btnX = (stripW - btnW) / 2;
+    const btnY = 0;
 
     this.controlsToggle = new Button({
       x: btnX, y: btnY, w: btnW, h: btnH,
@@ -426,18 +430,13 @@ export class SnakeGame extends App {
       textOptions: { font: "bold 22px sans-serif", color: "#cfe8cf" },
       onClick: () => this._toggleControls(),
     });
-    screen.add(this.controlsToggle);
-  }
+    this.controlsStrip.add(this.controlsToggle);
 
-  _buildDpad(screen) {
+    // D-pad below the toggle. Buttons start hidden.
     const btnSize = 90;
     const gap     = 10;
-
-    const centerX = Viewport.width / 2;
-    // D-pad sits below the controls toggle. Compute its anchor from
-    // the toggle position so the pair move together if either moves.
-    const toggleY = this._boardYVisible + this._boardH + 20;
-    const dpadTop = toggleY + 56 + 24;
+    const centerX = stripW / 2;
+    const dpadTop = btnH + 24;
     const centerY = dpadTop + btnSize + gap / 2;
 
     const defs = [
@@ -467,7 +466,7 @@ export class SnakeGame extends App {
         onClick: () => { this.queuedDir = d.dir; },
       });
       b.visible = false;
-      screen.add(b);
+      this.controlsStrip.add(b);
       this.dpadButtons.push(b);
     }
   }
@@ -477,9 +476,8 @@ export class SnakeGame extends App {
     this._applyControlsLayout();
   }
 
-  // Apply the current controlsVisible state: show/hide the D-pad,
-  // update the toggle button's label, and shift the board between
-  // its hidden (centered) and visible (raised) Y positions.
+  // Apply the current controlsVisible state to the strip contents.
+  // The board does not move.
   _applyControlsLayout() {
     const show = this.controlsVisible;
 
@@ -490,19 +488,14 @@ export class SnakeGame extends App {
     if (this.controlsToggle) {
       this.controlsToggle.setText(show ? "Hide Controls" : "Show Controls");
     }
-
-    this._boardY = show ? this._boardYVisible : this._boardYHidden;
-    this._repositionBoard();
   }
 
-  // Move the board background, wall, and snake layer to match
-  // _boardY. Called whenever the board position changes. Board size
-  // is never altered.
-  _repositionBoard() {
-    if (!this.boardBg) return;
-    this.boardBg.y   = this._boardY;
-    this.boardWall.y = this._boardY + CELL;
-    this.snakeLayer.y = this._boardY + CELL;
+  // Show or hide the whole controls strip. Called when the death or
+  // pause overlay opens/closes, so nothing shows through.
+  _setControlsStripVisible(on) {
+    if (this.controlsStrip) {
+      this.controlsStrip.visible = on;
+    }
   }
 
   _buildDeathOverlay() {
@@ -579,9 +572,6 @@ export class SnakeGame extends App {
     panel.add(this.initialsLabel);
 
     // Mobile-only on-canvas keyboard, plus Backspace and Enter.
-    // Built now, hidden until a qualifying score appears. The
-    // keyboard fills most of the panel width; backspace/enter sit
-    // below it.
     this.mobileKeyboard   = null;
     this.mobileBackspace  = null;
     this.mobileEnter      = null;
@@ -629,9 +619,6 @@ export class SnakeGame extends App {
       panel.add(this.mobileEnter);
     }
 
-    // Desktop action buttons. On mobile these sit far below the
-    // keyboard and are still used for Retry / Exit; the panel is
-    // taller so there is room for both the keyboard block and them.
     const btnW = 160, btnH = 56, gap = 24;
     const totalW = btnW * 2 + gap;
     const startX = (panelW - totalW) / 2;
@@ -661,7 +648,6 @@ export class SnakeGame extends App {
 
     overlay.visible = false;
 
-    // Start with the mobile initials UI hidden.
     this._setInitialsEntryVisible(false);
 
     return overlay;
@@ -669,7 +655,7 @@ export class SnakeGame extends App {
 
   // Show or hide the initials-entry UI: the initials label, and on
   // mobile the keyboard plus Backspace/Enter. One place to toggle
-  // them together so _die() and _saveScore paths stay in sync.
+  // them together.
   _setInitialsEntryVisible(on) {
     this.initialsLabel.visible = on;
     if (this.mobileKeyboard)  this.mobileKeyboard.visible  = on;
@@ -754,6 +740,7 @@ export class SnakeGame extends App {
     this.landingScreen.visible = false;
     this.scoresScreen.visible  = false;
     this.playScreen.visible    = true;
+    this._setControlsStripVisible(true);
   }
 
   _renderScores() {
@@ -777,12 +764,14 @@ export class SnakeGame extends App {
     if (!this.alive) return;
     this.paused = true;
     this.pauseOverlay.visible = true;
+    this._setControlsStripVisible(false);
   }
 
   _unpause() {
     if (!this.paused) return;
     this.paused = false;
     this.pauseOverlay.visible = false;
+    this._setControlsStripVisible(true);
   }
 
   // ---------- Run lifecycle ----------
@@ -1190,6 +1179,7 @@ export class SnakeGame extends App {
 
     this.deathOverlay.visible = true;
     this.pauseOverlay.visible = false;
+    this._setControlsStripVisible(false);
   }
 
   // ---------- Rendering ----------
