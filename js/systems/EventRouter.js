@@ -23,6 +23,12 @@
 //     Either way _pressedNode clears, then ONE hover pass runs at the
 //     release point so nodes land in the correct visual state.
 //
+// mousemove: routes hover, and ALWAYS falls through to app.onEvent
+// afterwards. Apps that care about drag/swipe read it there. While a
+// press is active, hover routing is skipped but the fall-through
+// still happens, so drags that started on a Button are still visible
+// to the app.
+//
 // State owned here:
 //   _lastHit     - node pointer was over as of the last hover pass.
 //   _pressedNode - current press target.
@@ -62,9 +68,14 @@ export class EventRouter {
     }
 
     if (event.type === "mousemove") {
-      // Hover is suppressed entirely while a press is active.
-      if (this._pressedNode) return;
-      this._routeHover(event, app);
+      // Hover is suppressed entirely while a press is active, but the
+      // app still needs to see the move so drag/swipe can track.
+      if (!this._pressedNode) {
+        this._routeHover(event, app);
+      }
+      if (app && app.onEvent) {
+        app.onEvent(event);
+      }
       return;
     }
 

@@ -235,7 +235,6 @@ export class SnakeGame extends App {
       },
     }));
 
-    // Row labels are built once and mutated as the list changes.
     this.scoreRows = [];
     const rowW   = Viewport.isMobile ? 560 : 400;
     const rowH   = 40;
@@ -297,7 +296,7 @@ export class SnakeGame extends App {
     }));
 
     const cx = Viewport.width / 2;
-    const scoreY = Viewport.isMobile ? 60 : 60;
+    const scoreY = 60;
 
     this.scoreLabel = new Label({
       x: cx, y: scoreY,
@@ -312,7 +311,6 @@ export class SnakeGame extends App {
     });
     screen.add(this.scoreLabel);
 
-    // Board. Wall ring (grey) with the playable interior on top.
     screen.add(new Rect({
       x: this._boardX, y: this._boardY,
       w: this._boardW, h: this._boardH,
@@ -328,9 +326,6 @@ export class SnakeGame extends App {
       stroke: null,
     }));
 
-    // The snake container lives in the playable interior's local
-    // space. Its origin is the interior's top-left, and cell (cx, cy)
-    // maps to local (cx - MIN_X, cy - MIN_Y) * CELL.
     this.snakeLayer = new Panel({
       x: this._boardX + CELL,
       y: this._boardY + CELL,
@@ -347,40 +342,30 @@ export class SnakeGame extends App {
     });
     this.snakeLayer.add(this.foodView);
 
-    // Segment views and head eye lines. Rebuilt each run in
-    // _startRun().
     this.segmentViews = [];
     this.eyeLines     = [];
 
-    // Death overlay. Sits above the board. Hidden until death.
     this.deathOverlay = this._buildDeathOverlay();
     screen.add(this.deathOverlay);
 
-    // Pause overlay. Same idea, different content. Hidden unless
-    // paused.
     this.pauseOverlay = this._buildPauseOverlay();
     screen.add(this.pauseOverlay);
 
-    // On-screen D-pad, mobile only. Sits below the board. Built here
-    // so its buttons share the play screen's visible flag.
-    if (Viewport.isMobile) {
-      this._buildDpad(screen);
-    }
+    // D-pad disabled for the swipe test. Re-enable by uncommenting.
+    // if (Viewport.isMobile) {
+    //   this._buildDpad(screen);
+    // }
 
     return screen;
   }
 
   _buildDpad(screen) {
-    // Four buttons in a cross. Sizes chosen so the cross fits the
-    // 720-wide box with margin.
     const btnSize = 90;
     const gap     = 10;
 
-    // Cross center: below the board.
     const centerX = Viewport.width / 2;
     const centerY = this._boardY + this._boardH + 60 + btnSize / 2;
 
-    // Up
     screen.add(new Button({
       x: centerX - btnSize / 2,
       y: centerY - btnSize - gap / 2,
@@ -394,7 +379,6 @@ export class SnakeGame extends App {
       onClick: () => { this.queuedDir = "up"; },
     }));
 
-    // Down
     screen.add(new Button({
       x: centerX - btnSize / 2,
       y: centerY + gap / 2,
@@ -408,7 +392,6 @@ export class SnakeGame extends App {
       onClick: () => { this.queuedDir = "down"; },
     }));
 
-    // Left
     screen.add(new Button({
       x: centerX - btnSize - gap / 2 - btnSize / 2,
       y: centerY - btnSize / 2,
@@ -422,7 +405,6 @@ export class SnakeGame extends App {
       onClick: () => { this.queuedDir = "left"; },
     }));
 
-    // Right
     screen.add(new Button({
       x: centerX + gap / 2 + btnSize / 2,
       y: centerY - btnSize / 2,
@@ -657,12 +639,9 @@ export class SnakeGame extends App {
     this.segmentViews = [];
     this.eyeLines     = [];
 
-    // Start cell: center of the grid.
     const cx = Math.floor((this._cols - 1) / 2);
     const cy = Math.floor((this._rows - 1) / 2);
 
-    // Head at (cx, cy), body trailing left because the initial
-    // direction is right. START_LENGTH cells total.
     this.snake = [];
     for (let i = 0; i < START_LENGTH; i++) {
       const sx = cx - i;
@@ -768,9 +747,8 @@ export class SnakeGame extends App {
 
   onEvent(e) {
     // Swipe tracking runs on the play screen on mobile. We watch
-    // mousedown/mousemove/mouseup (the router's names for pointer
-    // down/move/up) and decide at mouseup whether the gesture
-    // qualified as a swipe.
+    // mousedown/mousemove/mouseup and decide during the move whether
+    // the gesture has crossed the swipe threshold.
     if (Viewport.isMobile && this.playScreen.visible) {
       if (e.type === "mousedown") {
         this._swipeStart    = { x: e.x, y: e.y };
