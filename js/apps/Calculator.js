@@ -4,27 +4,26 @@
 // (Return top-left, display, 4x5 keypad). Both screens are built once
 // and toggled via `visible`.
 //
-// The landing/running split is built here, not extracted into a shared
-// composite: no second app needs it yet. When TimeClock wants the same
-// shell, that's when it earns abstraction.
+// Layout constants come from Viewport so the same code lays out
+// correctly at 1280x720 (desktop) and 720x1280 (mobile).
 //
 // Everything visible is a Composite. Layout is manual pixel
-// arithmetic in the 1280x720 virtual space.
+// arithmetic in the active virtual space.
 
-import { App }    from "./App.js";
-import { Panel }  from "../composites/Panel.js";
-import { Button } from "../composites/Button.js";
-import { Label }  from "../composites/Label.js";
+import { App }      from "./App.js";
+import { Panel }    from "../composites/Panel.js";
+import { Button }   from "../composites/Button.js";
+import { Label }    from "../composites/Label.js";
+import { Viewport } from "../systems/Viewport.js";
 
 export class Calculator extends App {
   static displayName = "Calculator";
 
   init() {
-    // App state. Plain fields, poked at by the buttons.
-    this.entry  = "0";    // currently typed value
-    this.stored = null;   // left-hand operand
-    this.op     = null;   // "+" | "-" | "*" | "/"
-    this.fresh  = true;   // next digit replaces `entry` rather than appends
+    this.entry  = "0";
+    this.stored = null;
+    this.op     = null;
+    this.fresh  = true;
 
     this.landingScreen = this._buildLanding();
     this.calcScreen    = this._buildCalculator();
@@ -35,27 +34,37 @@ export class Calculator extends App {
   }
 
   _buildLanding() {
+    const W = Viewport.width;
+    const H = Viewport.height;
+    const mobile = Viewport.isMobile;
+
     const screen = new Panel({
       x: 0, y: 0, w: "100%", h: "100%",
       fill: "#1b2a1b",
       stroke: null,
     });
 
+    const titleFont = mobile ? "bold 56px sans-serif" : "bold 44px sans-serif";
+    const titleY    = mobile ? H * 0.35 : 240;
+
     screen.add(new Label({
-      x: 640, y: 240,
+      x: W / 2, y: titleY,
       text: "Calculator",
       textOptions: {
-        font: "bold 44px sans-serif",
+        font: titleFont,
         color: "#cfe8cf",
         align: "center",
         baseline: "middle",
       },
     }));
 
-    const btnW = 220, btnH = 64, gap = 24;
+    const btnW = mobile ? 240 : 220;
+    const btnH = mobile ? 80 : 64;
+    const gap  = mobile ? 20 : 24;
     const totalW = btnW * 2 + gap;
-    const startX = (1280 - totalW) / 2;
-    const btnY = 380;
+    const startX = (W - totalW) / 2;
+    const btnY   = mobile ? H * 0.55 : 380;
+    const btnFont = mobile ? "bold 26px sans-serif" : "bold 22px sans-serif";
 
     screen.add(new Button({
       x: startX, y: btnY, w: btnW, h: btnH,
@@ -64,7 +73,7 @@ export class Calculator extends App {
       stroke: "#7bc07b",
       strokeWidth: 2,
       radius: 8,
-      textOptions: { font: "bold 22px sans-serif", color: "#ffffff" },
+      textOptions: { font: btnFont, color: "#ffffff" },
       onClick: () => this._showCalculator(),
     }));
 
@@ -75,7 +84,7 @@ export class Calculator extends App {
       stroke: "#888888",
       strokeWidth: 2,
       radius: 8,
-      textOptions: { font: "bold 22px sans-serif", color: "#ffffff" },
+      textOptions: { font: btnFont, color: "#ffffff" },
       onClick: () => this.exit(),
     }));
 
@@ -83,13 +92,16 @@ export class Calculator extends App {
   }
 
   _buildCalculator() {
+    const W = Viewport.width;
+    const H = Viewport.height;
+    const mobile = Viewport.isMobile;
+
     const screen = new Panel({
       x: 0, y: 0, w: "100%", h: "100%",
       fill: "#1b2a1b",
       stroke: null,
     });
 
-    // Return goes back to the landing screen, not all the way out.
     screen.add(new Button({
       x: 24, y: 24, w: 140, h: 48,
       text: "Return",
@@ -101,12 +113,13 @@ export class Calculator extends App {
       onClick: () => this._showLanding(),
     }));
 
-    const bodyW = 420;
-    const bodyX = (1280 - bodyW) / 2;
-    const bodyY = 110;
+    // Body width: 420 on desktop, near-full-width on mobile with a
+    // margin so keys stay comfortably tappable.
+    const bodyW = mobile ? W - 80 : 420;
+    const bodyX = (W - bodyW) / 2;
+    const bodyY = mobile ? 130 : 110;
 
-    // Display panel with a right-aligned Label.
-    const displayH = 90;
+    const displayH = mobile ? 120 : 90;
     const display = new Panel({
       x: bodyX, y: bodyY,
       w: bodyW, h: displayH,
@@ -122,7 +135,7 @@ export class Calculator extends App {
       w: "100%", h: "100%",
       text: "0",
       textOptions: {
-        font: "bold 48px monospace",
+        font: mobile ? "bold 64px monospace" : "bold 48px monospace",
         color: "#cfe8cf",
         align: "right",
         baseline: "middle",
@@ -130,7 +143,6 @@ export class Calculator extends App {
     });
     display.add(this.displayLabel);
 
-    // Vertical center, inset from the right edge.
     this.displayLabel.text.x = "90%";
     this.displayLabel.text.y = "50%";
 
@@ -139,7 +151,7 @@ export class Calculator extends App {
     const rows    = 5;
     const keyGap  = 10;
     const keyW    = (bodyW - (cols - 1) * keyGap) / cols;
-    const keyH    = 64;
+    const keyH    = mobile ? 100 : 64;
     const keypadH = rows * keyH + (rows - 1) * keyGap;
 
     const keypad = new Panel({
@@ -152,12 +164,6 @@ export class Calculator extends App {
     });
     screen.add(keypad);
 
-    // Committed 4x5 layout. Empty cells are simply not added.
-    //   C   /   *   -
-    //   7   8   9   +
-    //   4   5   6   =
-    //   1   2   3
-    //   0   .
     const layout = [
       ["C", "/", "*", "-"],
       ["7", "8", "9", "+"],
@@ -165,6 +171,8 @@ export class Calculator extends App {
       ["1", "2", "3", ""],
       ["0", ".", "", ""],
     ];
+
+    const keyFont = mobile ? "bold 36px sans-serif" : "bold 24px sans-serif";
 
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
@@ -181,7 +189,7 @@ export class Calculator extends App {
           stroke:      this._keyStroke(label),
           strokeWidth: 2,
           radius:      6,
-          textOptions: { font: "bold 24px sans-serif", color: "#ffffff" },
+          textOptions: { font: keyFont, color: "#ffffff" },
           onClick:     () => this._onKey(label),
         }));
       }
@@ -190,7 +198,6 @@ export class Calculator extends App {
     return screen;
   }
 
-  // Cosmetic only.
   _keyFill(label) {
     if (label === "=") return "#3f7f3f";
     if ("/*-+".includes(label)) return "#2a4a2a";
@@ -239,7 +246,6 @@ export class Calculator extends App {
     } else if (label === "=") {
       this._equals(false);
     } else {
-      // / * - +
       this._operator(label);
     }
   }
@@ -265,7 +271,6 @@ export class Calculator extends App {
   }
 
   _operator(op) {
-    // Fold a pending op so 2 + 3 + 4 works as (2+3)+4.
     if (this.op !== null && !this.fresh) {
       this._equals(true);
     }

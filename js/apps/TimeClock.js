@@ -1,8 +1,8 @@
 // Analog + digital clock.
 //
-// Structure: a landing screen (Start / Exit, same shape as Calculator)
-// and a running screen containing a clock face and a Digital/Analog
-// toggle. Both built once, toggled via visible.
+// Structure: a landing screen (Start / Exit) and a running screen
+// containing a clock face and a Digital/Analog toggle. Both built
+// once, toggled via visible.
 //
 // The running screen has two faces in the same spot: an analog face
 // (Circle rim, tick marks, 1-12 numbers, three hands) and a digital
@@ -10,26 +10,29 @@
 // visible at a time. The toggle button and Return button stay put
 // across the swap.
 //
+// Clock size is chosen from Viewport so the face fits comfortably on
+// both desktop (1280x720) and mobile (720x1280).
+//
 // Hands are Line + Polygon (an equilateral arrowhead at the line's
-// end). The Line's tip is set to the base midpoint of the triangle so
-// the shaft does not poke through the apex. Both objects reposition
-// each frame from the same angle.
+// end). The Line's tip is set to the base midpoint of the triangle
+// so the shaft does not poke through the apex.
 
-import { App }    from "./App.js";
-import { Rect }   from "../primitives/Rect.js";
-import { Circle } from "../primitives/Circle.js";
-import { Line }   from "../primitives/Line.js";
-import { Polygon } from "../primitives/Polygon.js";
-import { Text }   from "../primitives/Text.js";
-import { Panel }  from "../composites/Panel.js";
-import { Button } from "../composites/Button.js";
-import { Label }  from "../composites/Label.js";
+import { App }      from "./App.js";
+import { Rect }     from "../primitives/Rect.js";
+import { Circle }   from "../primitives/Circle.js";
+import { Line }     from "../primitives/Line.js";
+import { Polygon }  from "../primitives/Polygon.js";
+import { Text }     from "../primitives/Text.js";
+import { Panel }    from "../composites/Panel.js";
+import { Button }   from "../composites/Button.js";
+import { Label }    from "../composites/Label.js";
+import { Viewport } from "../systems/Viewport.js";
 
 export class TimeClock extends App {
   static displayName = "TimeClock";
 
   init() {
-    this.mode = "analog"; // "analog" | "digital"
+    this.mode = "analog";
 
     this.landingScreen = this._buildLanding();
     this.clockScreen   = this._buildClockScreen();
@@ -39,30 +42,38 @@ export class TimeClock extends App {
     this._showLanding();
   }
 
-  // ---- Landing screen (mirrors Calculator) ----
-
   _buildLanding() {
+    const W = Viewport.width;
+    const H = Viewport.height;
+    const mobile = Viewport.isMobile;
+
     const screen = new Panel({
       x: 0, y: 0, w: "100%", h: "100%",
       fill: "#151b2a",
       stroke: null,
     });
 
+    const titleFont = mobile ? "bold 56px sans-serif" : "bold 44px sans-serif";
+    const titleY    = mobile ? H * 0.35 : 240;
+
     screen.add(new Label({
-      x: 640, y: 240,
+      x: W / 2, y: titleY,
       text: "TimeClock",
       textOptions: {
-        font: "bold 44px sans-serif",
+        font: titleFont,
         color: "#c8d6ee",
         align: "center",
         baseline: "middle",
       },
     }));
 
-    const btnW = 220, btnH = 64, gap = 24;
+    const btnW = mobile ? 240 : 220;
+    const btnH = mobile ? 80 : 64;
+    const gap  = mobile ? 20 : 24;
     const totalW = btnW * 2 + gap;
-    const startX = (1280 - totalW) / 2;
-    const btnY = 380;
+    const startX = (W - totalW) / 2;
+    const btnY   = mobile ? H * 0.55 : 380;
+    const btnFont = mobile ? "bold 26px sans-serif" : "bold 22px sans-serif";
 
     screen.add(new Button({
       x: startX, y: btnY, w: btnW, h: btnH,
@@ -71,7 +82,7 @@ export class TimeClock extends App {
       stroke: "#6a86b8",
       strokeWidth: 2,
       radius: 8,
-      textOptions: { font: "bold 22px sans-serif", color: "#ffffff" },
+      textOptions: { font: btnFont, color: "#ffffff" },
       onClick: () => this._showClock(),
     }));
 
@@ -82,16 +93,18 @@ export class TimeClock extends App {
       stroke: "#888888",
       strokeWidth: 2,
       radius: 8,
-      textOptions: { font: "bold 22px sans-serif", color: "#ffffff" },
+      textOptions: { font: btnFont, color: "#ffffff" },
       onClick: () => this.exit(),
     }));
 
     return screen;
   }
 
-  // ---- Clock screen ----
-
   _buildClockScreen() {
+    const W = Viewport.width;
+    const H = Viewport.height;
+    const mobile = Viewport.isMobile;
+
     const screen = new Panel({
       x: 0, y: 0, w: "100%", h: "100%",
       fill: "#151b2a",
@@ -109,10 +122,14 @@ export class TimeClock extends App {
       onClick: () => this._showLanding(),
     }));
 
-    const cx  = 640;
-    const cy  = 320;
-    const r   = 240;
+    // Clock geometry. Desktop keeps 240 radius; mobile uses ~200 so
+    // the face fits the narrow 720-wide box with margin and leaves
+    // room for the toggle below.
+    const r   = mobile ? 200 : 240;
     const rim = 8;
+
+    const cx = W / 2;
+    const cy = mobile ? 500 : 320;
 
     this._cx  = cx;
     this._cy  = cy;
@@ -120,20 +137,29 @@ export class TimeClock extends App {
     this._rim = rim;
 
     this.analogFace  = this._buildAnalogFace(cx, cy, r, rim);
-    this.digitalFace = this._buildDigitalFace(cx, cy, r);
+    this.digitalFace = this._buildDigitalFace(cx, cy, r, mobile);
 
     screen.add(this.analogFace);
     screen.add(this.digitalFace);
 
+    // Toggle button: on desktop at fixed y=620; on mobile near the
+    // bottom of the screen.
+    const toggleY = mobile ? H - 160 : 620;
+    const toggleW = mobile ? 280 : 220;
+    const toggleH = mobile ? 72 : 56;
+
     this.toggleButton = new Button({
-      x: 640 - 110, y: 620,
-      w: 220, h: 56,
+      x: W / 2 - toggleW / 2, y: toggleY,
+      w: toggleW, h: toggleH,
       text: "Digital",
       fill: "#2a3552",
       stroke: "#6a86b8",
       strokeWidth: 2,
       radius: 8,
-      textOptions: { font: "bold 20px sans-serif", color: "#ffffff" },
+      textOptions: {
+        font: mobile ? "bold 24px sans-serif" : "bold 20px sans-serif",
+        color: "#ffffff",
+      },
       onClick: () => this._toggleMode(),
     });
     screen.add(this.toggleButton);
@@ -215,8 +241,6 @@ export class TimeClock extends App {
       }));
     }
 
-    // Hand geometry. Lengths are from the pivot; arrowSize is the
-    // equilateral triangle's side length.
     const hourLen    = r * 0.50;
     const hourTail   = r * 0.08;
     const hourWidth  = 8;
@@ -285,9 +309,9 @@ export class TimeClock extends App {
     return face;
   }
 
-  _buildDigitalFace(cx, cy, r) {
-    const panelW = 520;
-    const panelH = 160;
+  _buildDigitalFace(cx, cy, r, mobile) {
+    const panelW = mobile ? 620 : 520;
+    const panelH = mobile ? 260 : 160;
     const panelX = cx - panelW / 2;
     const panelY = cy - panelH / 2;
 
@@ -305,7 +329,7 @@ export class TimeClock extends App {
       w: "100%", h: "100%",
       text: "00:00:00",
       textOptions: {
-        font: "bold 64px monospace",
+        font: mobile ? "bold 96px monospace" : "bold 64px monospace",
         color: "#d8e4f7",
         align: "center",
         baseline: "middle",
@@ -318,7 +342,7 @@ export class TimeClock extends App {
     this.digitalAmPm = new Text({
       x: 0, y: 0,
       text: "AM",
-      font: "bold 18px monospace",
+      font: mobile ? "bold 24px monospace" : "bold 18px monospace",
       color: "#8fa9d0",
       align: "left",
       baseline: "middle",
@@ -328,17 +352,24 @@ export class TimeClock extends App {
     this.digitalMs = new Text({
       x: 0, y: 0,
       text: "000",
-      font: "14px monospace",
+      font: mobile ? "18px monospace" : "14px monospace",
       color: "#5f7a95",
       align: "left",
       baseline: "middle",
     });
     panel.add(this.digitalMs);
 
-    this.digitalAmPm.x = panelW - 78;
-    this.digitalAmPm.y = panelH / 2 - 18;
-    this.digitalMs.x    = panelW - 78;
-    this.digitalMs.y    = panelH / 2 + 14;
+    if (mobile) {
+      this.digitalAmPm.x = panelW - 100;
+      this.digitalAmPm.y = panelH / 2 - 40;
+      this.digitalMs.x    = panelW - 100;
+      this.digitalMs.y    = panelH / 2 + 40;
+    } else {
+      this.digitalAmPm.x = panelW - 78;
+      this.digitalAmPm.y = panelH / 2 - 18;
+      this.digitalMs.x    = panelW - 78;
+      this.digitalMs.y    = panelH / 2 + 14;
+    }
 
     return panel;
   }
@@ -396,21 +427,6 @@ export class TimeClock extends App {
                   this._secLen, this._secTail, 0);
   }
 
-  // Position a hand Line and (optionally) its arrowhead Polygon.
-  //
-  // Arrowhead is an equilateral triangle symmetric about the hand
-  // axis:
-  //
-  //      apex  <- points outward along the hand direction
-  //      /\
-  //     /  \
-  //    /____\  <- base, perpendicular to the axis, centered on it
-  //
-  // side = the triangle's side length. Height for an equilateral is
-  // side * sqrt(3)/2; the base sits that far back from the apex.
-  //
-  // The Line's x2/y2 is set to the base midpoint (not the apex), so
-  // the shaft doesn't poke through the tip of the triangle.
   _setHand(line, arrow, ang, len, tail, side) {
     const fx = this._fx;
     const fy = this._fy;
@@ -433,14 +449,12 @@ export class TimeClock extends App {
       return;
     }
 
-    // Equilateral: height = side * sqrt(3) / 2.
     const height    = side * Math.sqrt(3) / 2;
     const halfWidth = side / 2;
 
     const baseMidX = tipX - dx * height;
     const baseMidY = tipY - dy * height;
 
-    // Perpendicular unit vector.
     const pdx = -dy;
     const pdy =  dx;
 
@@ -449,19 +463,17 @@ export class TimeClock extends App {
     const bRx = baseMidX - pdx * halfWidth;
     const bRy = baseMidY - pdy * halfWidth;
 
-    // Shaft ends at the base midpoint so it does not show through.
     line.x1 = tailX;
     line.y1 = tailY;
     line.x2 = baseMidX;
     line.y2 = baseMidY;
 
-    // Polygon-local coords: shift by tip so Polygon.x/y = apex.
     arrow.x = tipX;
     arrow.y = tipY;
     arrow.points = [
-      { x: 0,           y: 0           }, // apex
-      { x: bLx - tipX,  y: bLy - tipY  }, // base left
-      { x: bRx - tipX,  y: bRy - tipY  }, // base right
+      { x: 0,           y: 0           },
+      { x: bLx - tipX,  y: bLy - tipY  },
+      { x: bRx - tipX,  y: bRy - tipY  },
     ];
   }
 

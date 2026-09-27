@@ -2,15 +2,18 @@
 //
 // Structure: a landing screen (Start / High Scores / Exit), a high
 // scores screen (Return + up to 10 rows), and a play screen (score
-// Label, board Panel, Return top-left, and a death overlay).
+// Label, board Panel, Return top-left, death overlay, pause overlay,
+// optional on-screen D-pad on mobile).
 //
 // Movement model: the snake's logical position is a grid of cells.
 // The head advances one cell per tick; between ticks every segment
 // interpolates from its previous cell to its current cell so motion
 // looks smooth. Turns only take effect at cell boundaries.
 //
-// Board: 160 x 120 cells of 5 virtual px each. The outermost ring of
-// cells is wall (grey). The playable area is cells 1..158 x 1..118.
+// Board geometry is computed at init() time from Viewport.width and
+// Viewport.height so the same game works on both virtual
+// resolutions. Desktop is 32 x 24 cells; mobile is 20 x 26 cells.
+// Cell size is 25px on both.
 //
 // No Layer. Segment count stays small enough that Composite + Rect
 // children are trivially fast.
@@ -23,21 +26,17 @@ import { Text }   from "../primitives/Text.js";
 import { Panel }  from "../composites/Panel.js";
 import { Button } from "../composites/Button.js";
 import { Label }  from "../composites/Label.js";
+import { Viewport } from "../systems/Viewport.js";
 
-// Board geometry, in virtual pixels.
-const CELL      = 5;
-const BOARD_X   = 240;
-const BOARD_Y   = 90;
-const BOARD_W   = 800;
-const BOARD_H   = 600;
-const COLS      = BOARD_W / CELL; // 160
-const ROWS      = BOARD_H / CELL; // 120
+// Cell size is shared. Board dimensions differ per device.
+const CELL = 25;
 
-// Playable cell range (inside the 1-cell wall ring).
-const MIN_X = 1;
-const MIN_Y = 1;
-const MAX_X = COLS - 2;
-const MAX_Y = ROWS - 2;
+// Playable cell range (inside the 1-cell wall ring). Filled in by
+// _computeLayout().
+let MIN_X = 1;
+let MIN_Y = 1;
+let MAX_X = 1;
+let MAX_Y = 1;
 
 // Directions as cell deltas.
 const DIR = {
@@ -47,25 +46,32 @@ const DIR = {
   right: { x:  1, y:  0 },
 };
 
-// Counter-clockwise bounce rule the user specified:
-//   left wall  -> up
-//   top wall   -> right
-//   right wall -> down
-//   bottom wall-> left
-const BOUNCE = {
-  left:  "up",
-  up:    "right",
-  right: "down",
-  down:  "left",
+// Perpendicular candidates for a wall bounce, in the order they are
+// tried. On a wall hit, try the two perpendicular directions; take
+// the first that lands in-bounds and off the body. If both are
+// blocked, die.
+const PERPENDICULAR = {
+  left:  ["up",   "down"],
+  right: ["up",   "down"],
+  up:    ["right", "left"],
+  down:  ["right", "left"],
 };
 
 const MAX_SCORES   = 10;
 const INITIALS_LEN = 3;
+const START_LENGTH = 5;
+
+// Swipe threshold, virtual pixels. A drag shorter than this is not a
+// swipe.
+const SWIPE_MIN = 30;
 
 export class SnakeGame extends App {
   static displayName = "Snake";
 
   init() {
+    // Board geometry, computed once from the active virtual box.
+    this._computeLayout();
+
     // Persistent across runs, per-session only.
     this.highScores = [];
 
@@ -80,11 +86,19 @@ export class SnakeGame extends App {
     this.alive       = false;
     this.started     = false;
 
-    // Death / initials state.
+    // Modal states. Not both true at once.
     this.dead        = false;
+    this.paused      = false;
+
+    // Death / initials state.
     this.initials    = "AAA";
     this.initialsIdx = 0;
     this.scoreSaved  = false;
+
+    // Swipe tracking. Only active while play screen is visible and
+    // the pointer is down.
+    this._swipeStart    = null;
+    this._swipeConsumed = false;
 
     this.landingScreen = this._buildLanding();
     this.scoresScreen  = this._buildScoresScreen();
@@ -96,6 +110,32 @@ export class SnakeGame extends App {
     this._showLanding();
   }
 
+  // Decide board rectangle and grid size from the active virtual box.
+  // Desktop: 800x600 board, 32 x 24 cells (matches the old values).
+  // Mobile:  500x650 board, 20 x 26 cells.
+  _computeLayout() {
+    if (Viewport.isMobile) {
+      this._cols    = 20;
+      this._rows    = 26;
+      this._boardW  = this._cols * CELL;
+      this._boardH  = this._rows * CELL;
+      this._boardX  = (Viewport.width - this._boardW) / 2;
+      this._boardY  = 110;
+    } else {
+      this._cols    = 32;
+      this._rows    = 24;
+      this._boardW  = this._cols * CELL;
+      this._boardH  = this._rows * CELL;
+      this._boardX  = 240;
+      this._boardY  = 90;
+    }
+
+    MIN_X = 1;
+    MIN_Y = 1;
+    MAX_X = this._cols - 2;
+    MAX_Y = this._rows - 2;
+  }
+
   // ---------- Screens ----------
 
   _buildLanding() {
@@ -105,8 +145,11 @@ export class SnakeGame extends App {
       stroke: null,
     });
 
+    const cx = Viewport.width / 2;
+    const titleY = Viewport.isMobile ? 280 : 200;
+
     screen.add(new Label({
-      x: 640, y: 200,
+      x: cx, y: titleY,
       text: "Snake",
       textOptions: {
         font: "bold 56px sans-serif",
@@ -116,9 +159,11 @@ export class SnakeGame extends App {
       },
     }));
 
-    const btnW = 260, btnH = 64, gap = 20;
-    const btnX = (1280 - btnW) / 2;
-    let   btnY = 320;
+    const btnW = Viewport.isMobile ? 380 : 260;
+    const btnH = 64;
+    const gap  = 20;
+    const btnX = (Viewport.width - btnW) / 2;
+    let   btnY = Viewport.isMobile ? 420 : 320;
 
     screen.add(new Button({
       x: btnX, y: btnY, w: btnW, h: btnH,
@@ -176,8 +221,11 @@ export class SnakeGame extends App {
       onClick: () => this._showLanding(),
     }));
 
+    const cx = Viewport.width / 2;
+    const titleY = Viewport.isMobile ? 140 : 90;
+
     screen.add(new Label({
-      x: 640, y: 90,
+      x: cx, y: titleY,
       text: "High Scores",
       textOptions: {
         font: "bold 40px sans-serif",
@@ -189,14 +237,14 @@ export class SnakeGame extends App {
 
     // Row labels are built once and mutated as the list changes.
     this.scoreRows = [];
-    const rowX = 440;
-    const rowW = 400;
-    const rowH = 40;
+    const rowW   = Viewport.isMobile ? 560 : 400;
+    const rowH   = 40;
     const rowGap = 6;
-    let   rowY = 170;
+    const rowX   = (Viewport.width - rowW) / 2;
+    const rowY0  = Viewport.isMobile ? 240 : 170;
 
     for (let i = 0; i < MAX_SCORES; i++) {
-      const y = rowY + i * (rowH + rowGap);
+      const y = rowY0 + i * (rowH + rowGap);
       const rank = new Text({
         x: rowX, y: y + rowH / 2,
         text: String(i + 1).padStart(2, " ") + ".",
@@ -248,8 +296,11 @@ export class SnakeGame extends App {
       onClick: () => this._showLanding(),
     }));
 
+    const cx = Viewport.width / 2;
+    const scoreY = Viewport.isMobile ? 60 : 60;
+
     this.scoreLabel = new Label({
-      x: 640, y: 60,
+      x: cx, y: scoreY,
       w: 0, h: 0,
       text: "Score: 0",
       textOptions: {
@@ -263,24 +314,28 @@ export class SnakeGame extends App {
 
     // Board. Wall ring (grey) with the playable interior on top.
     screen.add(new Rect({
-      x: BOARD_X, y: BOARD_Y, w: BOARD_W, h: BOARD_H,
+      x: this._boardX, y: this._boardY,
+      w: this._boardW, h: this._boardH,
       fill: "#3a3a3a",
       stroke: null,
     }));
 
     screen.add(new Rect({
-      x: BOARD_X + CELL, y: BOARD_Y + CELL,
-      w: BOARD_W - CELL * 2, h: BOARD_H - CELL * 2,
+      x: this._boardX + CELL, y: this._boardY + CELL,
+      w: this._boardW - CELL * 2,
+      h: this._boardH - CELL * 2,
       fill: "#0a120a",
       stroke: null,
     }));
 
-    // The snake container lives in the playable interior's local space.
-    // Its origin is the interior's top-left, and cell (cx, cy) maps to
-    // local (cx - MIN_X, cy - MIN_Y) * CELL.
+    // The snake container lives in the playable interior's local
+    // space. Its origin is the interior's top-left, and cell (cx, cy)
+    // maps to local (cx - MIN_X, cy - MIN_Y) * CELL.
     this.snakeLayer = new Panel({
-      x: BOARD_X + CELL, y: BOARD_Y + CELL,
-      w: BOARD_W - CELL * 2, h: BOARD_H - CELL * 2,
+      x: this._boardX + CELL,
+      y: this._boardY + CELL,
+      w: this._boardW - CELL * 2,
+      h: this._boardH - CELL * 2,
       self: null,
     });
     screen.add(this.snakeLayer);
@@ -301,7 +356,85 @@ export class SnakeGame extends App {
     this.deathOverlay = this._buildDeathOverlay();
     screen.add(this.deathOverlay);
 
+    // Pause overlay. Same idea, different content. Hidden unless
+    // paused.
+    this.pauseOverlay = this._buildPauseOverlay();
+    screen.add(this.pauseOverlay);
+
+    // On-screen D-pad, mobile only. Sits below the board. Built here
+    // so its buttons share the play screen's visible flag.
+    if (Viewport.isMobile) {
+      this._buildDpad(screen);
+    }
+
     return screen;
+  }
+
+  _buildDpad(screen) {
+    // Four buttons in a cross. Sizes chosen so the cross fits the
+    // 720-wide box with margin.
+    const btnSize = 90;
+    const gap     = 10;
+
+    // Cross center: below the board.
+    const centerX = Viewport.width / 2;
+    const centerY = this._boardY + this._boardH + 60 + btnSize / 2;
+
+    // Up
+    screen.add(new Button({
+      x: centerX - btnSize / 2,
+      y: centerY - btnSize - gap / 2,
+      w: btnSize, h: btnSize,
+      text: "^",
+      fill: "#2a3a2a",
+      stroke: "#5f7a5f",
+      strokeWidth: 2,
+      radius: 8,
+      textOptions: { font: "bold 32px sans-serif", color: "#cfe8cf" },
+      onClick: () => { this.queuedDir = "up"; },
+    }));
+
+    // Down
+    screen.add(new Button({
+      x: centerX - btnSize / 2,
+      y: centerY + gap / 2,
+      w: btnSize, h: btnSize,
+      text: "v",
+      fill: "#2a3a2a",
+      stroke: "#5f7a5f",
+      strokeWidth: 2,
+      radius: 8,
+      textOptions: { font: "bold 32px sans-serif", color: "#cfe8cf" },
+      onClick: () => { this.queuedDir = "down"; },
+    }));
+
+    // Left
+    screen.add(new Button({
+      x: centerX - btnSize - gap / 2 - btnSize / 2,
+      y: centerY - btnSize / 2,
+      w: btnSize, h: btnSize,
+      text: "<",
+      fill: "#2a3a2a",
+      stroke: "#5f7a5f",
+      strokeWidth: 2,
+      radius: 8,
+      textOptions: { font: "bold 32px sans-serif", color: "#cfe8cf" },
+      onClick: () => { this.queuedDir = "left"; },
+    }));
+
+    // Right
+    screen.add(new Button({
+      x: centerX + gap / 2 + btnSize / 2,
+      y: centerY - btnSize / 2,
+      w: btnSize, h: btnSize,
+      text: ">",
+      fill: "#2a3a2a",
+      stroke: "#5f7a5f",
+      strokeWidth: 2,
+      radius: 8,
+      textOptions: { font: "bold 32px sans-serif", color: "#cfe8cf" },
+      onClick: () => { this.queuedDir = "right"; },
+    }));
   }
 
   _buildDeathOverlay() {
@@ -310,10 +443,10 @@ export class SnakeGame extends App {
       self: new Rect({ fill: "rgba(0, 0, 0, 0.55)", stroke: null }),
     });
 
-    const panelW = 520;
+    const panelW = Viewport.isMobile ? 620 : 520;
     const panelH = 380;
-    const panelX = (1280 - panelW) / 2;
-    const panelY = (720 - panelH) / 2;
+    const panelX = (Viewport.width  - panelW) / 2;
+    const panelY = (Viewport.height - panelH) / 2;
 
     const panel = new Panel({
       x: panelX, y: panelY,
@@ -408,6 +541,60 @@ export class SnakeGame extends App {
     return overlay;
   }
 
+  _buildPauseOverlay() {
+    const overlay = new Panel({
+      x: 0, y: 0, w: "100%", h: "100%",
+      self: new Rect({ fill: "rgba(0, 0, 0, 0.45)", stroke: null }),
+    });
+
+    const panelW = 420;
+    const panelH = 220;
+    const panelX = (Viewport.width  - panelW) / 2;
+    const panelY = (Viewport.height - panelH) / 2;
+
+    const panel = new Panel({
+      x: panelX, y: panelY,
+      w: panelW, h: panelH,
+      fill: "#1a2434",
+      stroke: "#5a7ea8",
+      strokeWidth: 3,
+      radius: 12,
+    });
+    overlay.add(panel);
+
+    const titleLabel = new Label({
+      x: 0, y: 0, w: "100%", h: 0,
+      text: "Paused",
+      textOptions: {
+        font: "bold 40px sans-serif",
+        color: "#d8e4f7",
+        align: "center",
+        baseline: "middle",
+      },
+    });
+    panel.add(titleLabel);
+    titleLabel.text.x = "50%";
+    titleLabel.text.y = 60;
+
+    const btnW = 260, btnH = 64;
+    const btnX = (panelW - btnW) / 2;
+    const btnY = panelH - 90;
+
+    panel.add(new Button({
+      x: btnX, y: btnY, w: btnW, h: btnH,
+      text: "Unpause",
+      fill: "#2a3552",
+      stroke: "#6a86b8",
+      strokeWidth: 2,
+      radius: 8,
+      textOptions: { font: "bold 22px sans-serif", color: "#ffffff" },
+      onClick: () => this._unpause(),
+    }));
+
+    overlay.visible = false;
+    return overlay;
+  }
+
   // ---------- Screen switching ----------
 
   _showLanding() {
@@ -415,6 +602,8 @@ export class SnakeGame extends App {
     this.scoresScreen.visible  = false;
     this.playScreen.visible    = false;
     this.deathOverlay.visible  = false;
+    this.pauseOverlay.visible  = false;
+    this.paused                = false;
     this._stopRun();
   }
 
@@ -445,80 +634,90 @@ export class SnakeGame extends App {
     }
   }
 
+  // ---------- Pause ----------
+
+  _pause() {
+    if (this.dead) return;
+    if (!this.alive) return;
+    this.paused = true;
+    this.pauseOverlay.visible = true;
+  }
+
+  _unpause() {
+    if (!this.paused) return;
+    this.paused = false;
+    this.pauseOverlay.visible = false;
+  }
+
   // ---------- Run lifecycle ----------
 
   _startRun() {
-    // Clear any previous segment views and eye lines.
     for (const s of this.segmentViews) this.snakeLayer.remove(s);
     for (const l of this.eyeLines)     this.snakeLayer.remove(l);
     this.segmentViews = [];
     this.eyeLines     = [];
 
-    // Start cell: center of the grid. For even counts, top-left of the
-    // two central cells - computing from COLS/ROWS so odd dimensions
-    // would naturally land on the single center.
-    const cx = Math.floor((COLS - 1) / 2);
-    const cy = Math.floor((ROWS - 1) / 2);
+    // Start cell: center of the grid.
+    const cx = Math.floor((this._cols - 1) / 2);
+    const cy = Math.floor((this._rows - 1) / 2);
 
-    // Two segments, head at (cx, cy), tail one cell to the left
-    // because the initial direction is right.
+    // Head at (cx, cy), body trailing left because the initial
+    // direction is right. START_LENGTH cells total.
     this.snake = [];
-    this.snake.push({ x: cx,     y: cy, px: cx,     py: cy });
-    this.snake.push({ x: cx - 1, y: cy, px: cx - 1, py: cy });
+    for (let i = 0; i < START_LENGTH; i++) {
+      const sx = cx - i;
+      this.snake.push({ x: sx, y: cy, px: sx, py: cy });
+    }
 
-    // Views, one per segment.
-    //   index 0 -> head, rounded Rect + eyes
-    //   everything else -> plain Rect
     for (let i = 0; i < this.snake.length; i++) {
       const isHead = i === 0;
       const view = new Rect({
         x: 0, y: 0, w: CELL, h: CELL,
         fill: "#e8e04a",
         stroke: null,
-        radius: isHead ? 2 : 0,
+        radius: isHead ? 5 : 0,
       });
       this.snakeLayer.add(view);
       this.segmentViews.push(view);
     }
 
-    // Head eyes: two short lines. Repositioned each frame based on
-    // direction.
     this.eyeLines = [];
     for (let i = 0; i < 2; i++) {
       const l = new Line({
         x1: 0, y1: 0, x2: 0, y2: 0,
         stroke: "#101010",
-        strokeWidth: 1,
+        strokeWidth: 3,
       });
       this.snakeLayer.add(l);
       this.eyeLines.push(l);
     }
 
-    // Food: place now.
     this._placeFood();
 
-    // Reset run state. Snake starts moving right immediately.
-    this.score      = 0;
-    this.dir        = "right";
-    this.queuedDir  = null;
-    this.tickTimer  = 0;
-    this.tickDur    = this._tickDurationFor(this.snake.length);
-    this.alive      = true;
-    this.started    = true;
-    this.dead       = false;
-    this.initials   = "AAA";
+    this.score       = 0;
+    this.dir         = "right";
+    this.queuedDir   = null;
+    this.tickTimer   = 0;
+    this.tickDur     = this._tickDurationFor(this.snake.length);
+    this.alive       = true;
+    this.started     = true;
+    this.dead        = false;
+    this.paused      = false;
+    this.initials    = "AAA";
     this.initialsIdx = 0;
-    this.scoreSaved = false;
+    this.scoreSaved  = false;
 
     this._refreshScoreLabel();
     this._layoutSnake(0);
     this.deathOverlay.visible = false;
+    this.pauseOverlay.visible = false;
     this._showPlay();
   }
 
   _stopRun() {
-    this.alive = false;
-    this.dead  = false;
+    this.alive  = false;
+    this.dead   = false;
+    this.paused = false;
   }
 
   _refreshScoreLabel() {
@@ -528,8 +727,6 @@ export class SnakeGame extends App {
   // ---------- Food ----------
 
   _placeFood() {
-    // Build the set of free cells. Then pick uniformly from it. No
-    // retry loop, and no bias toward low indices.
     const occupied = new Set();
     for (const s of this.snake) {
       occupied.add(s.x + "," + s.y);
@@ -544,7 +741,6 @@ export class SnakeGame extends App {
     }
 
     if (free.length === 0) {
-      // Board full: treat as a win condition; not handled specially.
       this.food = null;
       return;
     }
@@ -558,13 +754,11 @@ export class SnakeGame extends App {
 
   // ---------- Speed curve ----------
 
-  // Logistic S-curve. 10 cells/sec at length 2, approaching 30 cells/sec
-  // as length grows. Midpoint around length ~22.
   _tickDurationFor(length) {
-    const slow   = 10;  // cells/sec at the low end
-    const fast   = 30;  // cells/sec at the high end
-    const midLen = 22;
-    const k      = 0.18;
+    const slow   = 4.5;
+    const fast   = 9.0;
+    const midLen = 25;
+    const k      = 0.10;
 
     const cellsPerSec = fast - (fast - slow) / (1 + Math.exp(k * (length - midLen)));
     return 1 / cellsPerSec;
@@ -573,19 +767,63 @@ export class SnakeGame extends App {
   // ---------- Input ----------
 
   onEvent(e) {
+    // Swipe tracking runs on the play screen on mobile. We watch
+    // mousedown/mousemove/mouseup (the router's names for pointer
+    // down/move/up) and decide at mouseup whether the gesture
+    // qualified as a swipe.
+    if (Viewport.isMobile && this.playScreen.visible) {
+      if (e.type === "mousedown") {
+        this._swipeStart    = { x: e.x, y: e.y };
+        this._swipeConsumed = false;
+        return;
+      }
+      if (e.type === "mousemove" && this._swipeStart && !this._swipeConsumed) {
+        const dx = e.x - this._swipeStart.x;
+        const dy = e.y - this._swipeStart.y;
+        const adx = Math.abs(dx);
+        const ady = Math.abs(dy);
+        if (adx >= SWIPE_MIN || ady >= SWIPE_MIN) {
+          if (adx > ady) {
+            this.queuedDir = dx > 0 ? "right" : "left";
+          } else {
+            this.queuedDir = dy > 0 ? "down" : "up";
+          }
+          this._swipeConsumed = true;
+        }
+        return;
+      }
+      if (e.type === "mouseup") {
+        this._swipeStart    = null;
+        this._swipeConsumed = false;
+        return;
+      }
+    }
+
     if (e.type !== "keydown") return;
     if (!this.playScreen.visible) return;
+    if (e.repeat) return;
+
+    if (e.key === " " || e.code === "Space") {
+      if (this.dead) return;
+      if (!this.alive) return;
+      if (this.paused) {
+        this._unpause();
+      } else {
+        this._pause();
+      }
+      return;
+    }
 
     if (this.dead) {
       this._handleInitialsKey(e.key);
       return;
     }
 
+    if (this.paused) return;
+
     const dir = this._keyToDir(e.key);
     if (!dir) return;
 
-    // Latest-wins single-slot queue. Reversal is checked when the queue
-    // would take effect, in _advance, not here.
     this.queuedDir = dir;
   }
 
@@ -608,7 +846,6 @@ export class SnakeGame extends App {
 
   _handleInitialsKey(key) {
     if (this.scoreSaved) {
-      // Only Retry / Exit buttons do anything once saved.
       return;
     }
 
@@ -634,7 +871,6 @@ export class SnakeGame extends App {
   }
 
   _refreshInitialsLabel() {
-    // Three visible slots, current slot highlighted in brackets.
     let s = "";
     for (let i = 0; i < INITIALS_LEN; i++) {
       const ch = this.initials[i];
@@ -668,6 +904,7 @@ export class SnakeGame extends App {
   update(dt) {
     if (!this.playScreen.visible) return;
     if (this.dead) return;
+    if (this.paused) return;
     if (!this.alive) return;
 
     this.tickTimer += dt;
@@ -684,7 +921,6 @@ export class SnakeGame extends App {
   }
 
   _advance() {
-    // Apply the queued direction if it is legal at this boundary.
     if (this.queuedDir) {
       if (!this._isReversal(this.dir, this.queuedDir)) {
         this.dir = this.queuedDir;
@@ -698,40 +934,26 @@ export class SnakeGame extends App {
     let nx = head.x + d.x;
     let ny = head.y + d.y;
 
-    // Wall bounce. Wins over whatever the player pressed this tick.
-    // Rule: left->up, top->right, right->down, bottom->left.
-    if (nx < MIN_X) {
-      this.dir = BOUNCE.left;
+    const hitWall =
+      nx < MIN_X || nx > MAX_X || ny < MIN_Y || ny > MAX_Y;
+
+    if (hitWall) {
+      const bounceDir = this._pickBounceDir(head);
+      if (!bounceDir) {
+        this._die();
+        return;
+      }
+      this.dir = bounceDir;
       d        = DIR[this.dir];
       nx       = head.x + d.x;
       ny       = head.y + d.y;
-    } else if (nx > MAX_X) {
-      this.dir = BOUNCE.right;
-      d        = DIR[this.dir];
-      nx       = head.x + d.x;
-      ny       = head.y + d.y;
-    } else if (ny < MIN_Y) {
-      this.dir = BOUNCE.up;
-      d        = DIR[this.dir];
-      nx       = head.x + d.x;
-      ny       = head.y + d.y;
-    } else if (ny > MAX_Y) {
-      this.dir = BOUNCE.down;
-      d        = DIR[this.dir];
-      nx       = head.x + d.x;
-      ny       = head.y + d.y;
+
+      if (nx < MIN_X || nx > MAX_X || ny < MIN_Y || ny > MAX_Y) {
+        this._die();
+        return;
+      }
     }
 
-    // If the bounce itself lands us into a wall (extreme corner case
-    // on a tiny board), just die to avoid an infinite loop.
-    if (nx < MIN_X || nx > MAX_X || ny < MIN_Y || ny > MAX_Y) {
-      this._die();
-      return;
-    }
-
-    // Self-collision: the cell we are about to enter must not contain
-    // a body segment, excluding the tail cell if it is about to vacate
-    // this tick (i.e. we are not growing).
     const willGrow  = this.food && nx === this.food.x && ny === this.food.y;
     const ignoreIdx = willGrow ? -1 : this.snake.length - 1;
     for (let i = 0; i < this.snake.length; i++) {
@@ -742,10 +964,6 @@ export class SnakeGame extends App {
       }
     }
 
-    // Advance. For every segment except the head:
-    //   px/py = this segment's OWN current cell (where it was last tick)
-    //   x/y   = the previous segment's OLD cell (where it moves to)
-    // The head is special: it moves into a brand new cell.
     const oldCells = this.snake.map(s => ({ x: s.x, y: s.y }));
 
     for (let i = 1; i < this.snake.length; i++) {
@@ -763,8 +981,6 @@ export class SnakeGame extends App {
     head.x  = nx;
     head.y  = ny;
 
-    // Growth: add a new tail segment at the old tail position. The
-    // new segment starts where the old tail was (visually contiguous).
     if (willGrow) {
       const tail = this.snake[this.snake.length - 1];
       const gx   = tail.x;
@@ -788,21 +1004,49 @@ export class SnakeGame extends App {
     }
   }
 
-  _die() {
-    this.alive = false;
-    this.dead  = true;
+  _pickBounceDir(head) {
+    const candidates = PERPENDICULAR[this.dir];
+    if (!candidates) return null;
 
-    // Freeze layout at t = 1 (fully in the last cell).
+    for (const dirName of candidates) {
+      const d  = DIR[dirName];
+      const cx = head.x + d.x;
+      const cy = head.y + d.y;
+
+      if (cx < MIN_X || cx > MAX_X || cy < MIN_Y || cy > MAX_Y) {
+        continue;
+      }
+
+      let blocked = false;
+      for (const s of this.snake) {
+        if (s.x === cx && s.y === cy) {
+          blocked = true;
+          break;
+        }
+      }
+      if (blocked) continue;
+
+      return dirName;
+    }
+
+    return null;
+  }
+
+  _die() {
+    this.alive  = false;
+    this.dead   = true;
+    this.paused = false;
+
     this._layoutSnake(1);
 
     this.deathScoreLabel.setText("Score: " + this.score);
     const isHigh = this._wouldMakeHighScore();
-    this.scoreSaved = false;
-    this.initials   = "AAA";
+    this.scoreSaved  = false;
+    this.initials    = "AAA";
     this.initialsIdx = 0;
 
     if (isHigh) {
-      this.deathPromptLabel.setText("New high score! Enter initials:");
+      this.deathPromptLabel.setText("New high score! Type initials and then press Enter:");
       this._refreshInitialsLabel();
       this.initialsLabel.visible = true;
     } else {
@@ -811,12 +1055,11 @@ export class SnakeGame extends App {
     }
 
     this.deathOverlay.visible = true;
+    this.pauseOverlay.visible = false;
   }
 
   // ---------- Rendering ----------
 
-  // t in [0,1] is how far through the current tick we are. Segments
-  // lerp from their previous cell to their current cell.
   _layoutSnake(t) {
     const n = this.snake.length;
     if (n === 0) return;
@@ -833,7 +1076,6 @@ export class SnakeGame extends App {
       view.h = CELL;
     }
 
-    // Head eyes: oriented to the current direction. Head view is [0].
     const head = this.snake[0];
     const hx   = (head.px + (head.x - head.px) * t - MIN_X) * CELL;
     const hy   = (head.py + (head.y - head.py) * t - MIN_Y) * CELL;
@@ -841,21 +1083,23 @@ export class SnakeGame extends App {
   }
 
   _layoutEyes(hx, hy, dir) {
-    // Eyes sit on the leading face, inset slightly. Two short lines
-    // perpendicular to travel. Coordinates are local to the head tile.
+    const inset = Math.round(CELL * 0.25);
+    const len   = Math.round(CELL * 0.25);
+    const far   = CELL - inset;
+
     let e1, e2;
     if (dir === "right") {
-      e1 = [CELL - 2, 1,      CELL - 2, 2];
-      e2 = [CELL - 2, CELL - 2, CELL - 2, CELL - 1];
+      e1 = [far, inset,       far, inset + len];
+      e2 = [far, CELL - inset - len, far, CELL - inset];
     } else if (dir === "left") {
-      e1 = [1, 1,      1, 2];
-      e2 = [1, CELL - 2, 1, CELL - 1];
+      e1 = [inset, inset,       inset, inset + len];
+      e2 = [inset, CELL - inset - len, inset, CELL - inset];
     } else if (dir === "up") {
-      e1 = [1,      1, 2,      1];
-      e2 = [CELL - 2, 1, CELL - 1, 1];
-    } else { // down
-      e1 = [1,      CELL - 2, 2,      CELL - 2];
-      e2 = [CELL - 2, CELL - 2, CELL - 1, CELL - 2];
+      e1 = [inset,       inset, inset + len, inset];
+      e2 = [CELL - inset - len, inset, CELL - inset, inset];
+    } else {
+      e1 = [inset,       far, inset + len, far];
+      e2 = [CELL - inset - len, far, CELL - inset, far];
     }
 
     const l1 = this.eyeLines[0];

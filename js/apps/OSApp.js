@@ -5,37 +5,44 @@
 // makes one Button per entry. Adding an app never touches this file.
 //
 // OSApp is itself an App, launched by main.js as the default. It is
-// deliberately NOT in registry.js - you can't launch the launcher from
-// the launcher.
+// deliberately NOT in registry.js - you can't launch the launcher
+// from the launcher.
 
-import { App }    from "./App.js";
-import { Rect }   from "../primitives/Rect.js";
-import { Text }   from "../primitives/Text.js";
-import { Button } from "../composites/Button.js";
-import { Panel }  from "../composites/Panel.js";
-import { APPS }   from "./registry.js";
+import { App }      from "./App.js";
+import { Rect }     from "../primitives/Rect.js";
+import { Text }     from "../primitives/Text.js";
+import { Button }   from "../composites/Button.js";
+import { Panel }    from "../composites/Panel.js";
+import { APPS }     from "./registry.js";
+import { Viewport } from "../systems/Viewport.js";
 
 export class OSApp extends App {
   static displayName = "OSApp";
 
   init() {
+    const W = Viewport.width;
+    const H = Viewport.height;
+    const mobile = Viewport.isMobile;
+
     this.root.add(new Rect({
       x: 0, y: 0, w: "100%", h: "100%",
       fill: "#0d1015",
     }));
 
+    const titleFont = mobile ? "bold 56px sans-serif" : "bold 44px sans-serif";
+    const titleY    = mobile ? 140 : 90;
+
     this.root.add(new Text({
-      x: 640, y: 90,
+      x: W / 2, y: titleY,
       text: "CanvasOS",
-      font: "bold 44px sans-serif",
+      font: titleFont,
       color: "#e6ecf5",
       align: "center",
       baseline: "middle",
     }));
 
-    // Live check that registry.js is being read correctly.
     this.root.add(new Text({
-      x: 640, y: 140,
+      x: W / 2, y: titleY + 50,
       text: APPS.length + (APPS.length === 1 ? " app" : " apps"),
       font: "16px monospace",
       color: "#5f7a95",
@@ -43,11 +50,10 @@ export class OSApp extends App {
       baseline: "middle",
     }));
 
-    // No centering helper exists; arithmetic in place.
-    const panelW = 420;
-    const panelX = (1280 - panelW) / 2;
-    const panelY = 200;
-    const btnH   = 64;
+    const panelW = mobile ? 620 : 420;
+    const panelX = (W - panelW) / 2;
+    const panelY = mobile ? 240 : 200;
+    const btnH   = mobile ? 80 : 64;
     const btnGap = 16;
     const pad    = 24;
 
@@ -64,6 +70,7 @@ export class OSApp extends App {
     this.root.add(panel);
 
     const btnW = panelW - pad * 2;
+    const btnFont = mobile ? "bold 26px sans-serif" : "bold 22px sans-serif";
 
     if (APPS.length === 0) {
       panel.add(new Text({
@@ -85,7 +92,7 @@ export class OSApp extends App {
           stroke: "#4a8ff5",
           strokeWidth: 2,
           radius: 8,
-          textOptions: { font: "bold 22px sans-serif", color: "#ffffff" },
+          textOptions: { font: btnFont, color: "#ffffff" },
           onClick: () => this.launch(AppClass),
         });
         panel.add(btn);
@@ -93,7 +100,7 @@ export class OSApp extends App {
     }
 
     this.root.add(new Text({
-      x: 640, y: 690,
+      x: W / 2, y: H - 30,
       text: "click an app to launch it",
       font: "12px monospace",
       color: "#3d5468",
