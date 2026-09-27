@@ -26,7 +26,9 @@
 // Mobile gestures, on the play screen only, no overlay up:
 //   - Tap in the well           -> rotate CW.
 //   - Horizontal drag           -> move left/right, one cell per step.
-//   - Vertical drag down        -> soft drop (same as holding Down).
+//   - Vertical drag down        -> soft drop, positional. One cell per
+//     SWIPE_STEP of downward travel. The piece follows the thumb; it
+//     does not race ahead of it. Cells already moved stay moved.
 //   - Classification is one-shot per gesture: whichever axis crosses
 //     its threshold first wins, and stays. If ambiguous we favor
 //     horizontal, so an uncertain gesture never drops the piece.
@@ -87,7 +89,7 @@ const INITIALS_LEN = 3;
 // ---- Gesture tuning (virtual px) ----
 const SWIPE_H_THRESHOLD = 20;   // horizontal lock-in distance
 const SWIPE_V_THRESHOLD = 40;   // vertical lock-in distance (higher: err horizontal)
-const SWIPE_STEP        = 24;   // finger travel per horizontal cell move
+const SWIPE_STEP        = 24;   // finger travel per cell move (both axes)
 const TAP_MAX_MS        = 220;  // tap must be shorter than this
 const TAP_MAX_DIST      = 8;    // and travel less than this
 
@@ -186,13 +188,13 @@ export class Tetris extends App {
     this.scoreSaved  = false;
 
     // Gesture state (mobile only).
-    this._gActive       = false;
-    this._gMode         = null;
-    this._gStartX       = 0;
-    this._gStartY       = 0;
-    this._gStartTime    = 0;
-    this._gLastCellX    = 0;
-    this._gSoftDrop     = false;
+    this._gActive    = false;
+    this._gMode      = null;
+    this._gStartX    = 0;
+    this._gStartY    = 0;
+    this._gStartTime = 0;
+    this._gLastCellX = 0;
+    this._gLastCellY = 0;
 
     // Mobile controls visibility.
     this.controlsVisible = false;
@@ -1378,7 +1380,7 @@ export class Tetris extends App {
     this._gStartY    = e.y;
     this._gStartTime = performance.now();
     this._gLastCellX = 0;
-    this._gSoftDrop  = false;
+    this._gLastCellY = 0;
   }
 
   _onGestureMove(e) {
@@ -1394,7 +1396,7 @@ export class Tetris extends App {
         this._gLastCellX = 0;
       } else if (ady >= SWIPE_V_THRESHOLD && ady > adx) {
         this._gMode = "v";
-        this._gSoftDrop = true;
+        this._gLastCellY = 0;
       }
       return;
     }
@@ -1412,6 +1414,24 @@ export class Tetris extends App {
         this._repaintActive();
       }
       return;
+    }
+
+    // Vertical: positional soft drop. Downward travel beyond the
+    // lock-in threshold counts as additional cells. Cells already
+    // pushed down are not undone if the finger drags back up; the
+    // last-cell counter follows the finger so dragging up and then
+    // down again does not double-count the middle range.
+    const steps = Math.trunc(dy / SWIPE_STEP);
+    const delta = steps - this._gLastCellY;
+    if (delta > 0) {
+      for (let i = 0; i < delta; i++) {
+        this._softDropStep();
+      }
+      this._gLastCellY = steps;
+    } else if (delta < 0) {
+      // Follow the finger upward so re-dragging down works, but do
+      // not move the piece back up.
+      this._gLastCellY = steps;
     }
   }
 
@@ -1431,8 +1451,8 @@ export class Tetris extends App {
   _clearGesture() {
     this._gActive    = false;
     this._gMode      = null;
-    this._gSoftDrop  = false;
     this._gLastCellX = 0;
+    this._gLastCellY = 0;
   }
 
   _inWell(x, y) {
@@ -1465,11 +1485,6 @@ export class Tetris extends App {
     if (!this.alive) return;
     if (this.paused) return;
     if (!this.piece) return;
-
-    if (this._gSoftDrop) {
-      this._softDropStep();
-      if (!this.alive) return;
-    }
 
     this.gravityTimer += dt;
     const interval = this._gravityInterval();
