@@ -2,9 +2,8 @@
 //
 // Structure: a landing screen (Start / High Scores / Exit), a high
 // scores screen (Return + up to 10 rows), and a play screen (score
-// Label, board, Return top-left, pause overlay, death overlay,
-// mobile-only Pause button, and a mobile-only controls strip below
-// the board).
+// Label, board, Return top-left, Pause top-right, pause overlay,
+// death overlay, and a mobile-only controls strip below the board).
 //
 // Movement model: the snake's logical position is a grid of cells.
 // The head advances one cell per tick; between ticks every segment
@@ -15,6 +14,9 @@
 // Viewport.height. Desktop is 32 x 24 cells; mobile is 24 x 32
 // (inverted). Cell size is 25px on both. The board never moves on
 // mobile; only the controls strip below it shows or hides its D-pad.
+//
+// Pause button: top-right on both desktop and mobile, mirrored to
+// Return top-left. Same coordinates and style as Tetris's Pause.
 //
 // Mobile controls: a controls strip Composite sits below the board
 // containing a Show/Hide Controls toggle and (when shown) a D-pad.
@@ -313,19 +315,18 @@ export class SnakeGame extends App {
       onClick: () => this._showLanding(),
     }));
 
-    // Mobile-only Pause button in the top-right corner.
-    if (Viewport.isMobile) {
-      screen.add(new Button({
-        x: Viewport.width - 164, y: 24, w: 140, h: 48,
-        text: "Pause",
-        fill: "#2a3552",
-        stroke: "#6a86b8",
-        strokeWidth: 2,
-        radius: 8,
-        textOptions: { font: "bold 18px sans-serif", color: "#ffffff" },
-        onClick: () => this._pause(),
-      }));
-    }
+    // Pause button, top-right, mirrored to Return. Same coordinates
+    // and style as Tetris, on both desktop and mobile.
+    screen.add(new Button({
+      x: Viewport.width - 164, y: 24, w: 140, h: 48,
+      text: "Pause",
+      fill: "#2a3552",
+      stroke: "#6a86b8",
+      strokeWidth: 2,
+      radius: 8,
+      textOptions: { font: "bold 18px sans-serif", color: "#ffffff" },
+      onClick: () => this._pause(),
+    }));
 
     const cx = Viewport.width / 2;
     const scoreY = 60;
