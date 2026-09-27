@@ -18,8 +18,7 @@
 // see Renderer's header comment for why.
 //
 // Keyboard events are still on window so focus quirks don't swallow
-// them. Touch is mouse-like enough that no separate keyboard path is
-// needed for pointer input.
+// them.
 
 export class InputHandler {
   constructor(canvas, virtualW, virtualH) {
@@ -74,20 +73,29 @@ export class InputHandler {
 
     const canvas = this.canvas;
 
-    // Suppress the browser's default touch behaviors inside the
-    // canvas: scrolling, pinch-zoom, double-tap zoom, and the
-    // synthesized "click" event that fires 300ms after a tap. The
-    // CSS touch-action: none already covers most of this; the
-    // preventDefault here is a belt-and-braces for browsers that
-    // still emit the synthetic mouse sequence.
+    // touchstart / touchmove preventDefault are belt-and-braces.
+    // Pointer Events already fire preventDefaultable events; the
+    // real suppression that matters is on pointerdown below. But
+    // some older browsers still gate gesture interpretation on the
+    // touch events, so covering both is cheap.
     canvas.addEventListener("touchstart", (e) => {
       e.preventDefault();
     }, { passive: false });
 
+    canvas.addEventListener("touchmove", (e) => {
+      e.preventDefault();
+    }, { passive: false });
+
     canvas.addEventListener("pointerdown", (e) => {
-      // Right-click should not start a press. Let contextmenu handle
-      // it (which we still suppress below).
+      // Right-click should not start a press.
       if (e.button !== 0) return;
+
+      // Suppress the browser's interpretation of this as the start
+      // of a native gesture (scroll, pan, pinch, text selection).
+      // Without this, mobile browsers often convert the pointer
+      // stream to pointercancel after the first move, which kills
+      // drag-based input like swipes.
+      e.preventDefault();
 
       const p = this._toVirtual(e.clientX, e.clientY);
       this.pointerX = p.x;
@@ -102,6 +110,13 @@ export class InputHandler {
     });
 
     canvas.addEventListener("pointermove", (e) => {
+      // Only preventDefault while a button is down. Passive pointer
+      // movement (no button) has no default to suppress anyway, but
+      // guarding keeps the intent clear.
+      if (e.buttons !== 0) {
+        e.preventDefault();
+      }
+
       const p = this._toVirtual(e.clientX, e.clientY);
       this.pointerX = p.x;
       this.pointerY = p.y;
@@ -128,13 +143,10 @@ export class InputHandler {
       });
     });
 
-    // pointercancel fires when the browser takes over the gesture
-    // (e.g. a system swipe). Treat it as a release that did not
-    // land on the press target, so any pressed Button visually
-    // resets. The router's mouseup path handles this via hit-test;
-    // a cancel has no meaningful coords, so emit at the last known
-    // pointer position. If that lands off the press target, the
-    // router fires onReleaseCancel. Good enough.
+    // pointercancel fires when the browser takes over the gesture.
+    // With the preventDefault on pointerdown above this should be
+    // rare, but keep it as a safety net so any pressed Button
+    // visually resets.
     canvas.addEventListener("pointercancel", (e) => {
       this._emit({
         type: "mouseup",
@@ -145,13 +157,8 @@ export class InputHandler {
       });
     });
 
-    // Keep clicks inside the canvas from opening the context menu.
     canvas.addEventListener("contextmenu", (e) => e.preventDefault());
 
-    // Pointer left the canvas. Mouse-only concept; on touch there is
-    // no equivalent because the finger's "presence" is the contact.
-    // Fires for a mouse leaving the element, and for a pointer that
-    // is cancelled by the browser. The router handles both.
     canvas.addEventListener("pointerleave", () => {
       this._emit({ type: "mouseleave" });
     });
