@@ -30,6 +30,12 @@
 //
 // A local back-stack drives navigation. Return/Leave walks it back.
 // Only the token screen's Return exits to OSApp.
+//
+// Text fields (token, username, chat input) share one pattern: a
+// buffer string, a Label that renders buffer + cursor, and a
+// blinking cursor toggled every CURSOR_MS in update(dt). The token
+// screen also has a Paste button that calls navigator.clipboard.
+// readText() from inside the click gesture.
 
 import { App }       from "./App.js";
 import { Rect }      from "../primitives/Rect.js";
@@ -44,8 +50,8 @@ import { Viewport }  from "../systems/Viewport.js";
 // FILL THESE IN
 // -----------------------------------------------------------------
 
-const OWNER  = "tanagram2";
-const REPO   = "tanagram2.github.io";
+const OWNER  = "YOUR_GITHUB_USERNAME";
+const REPO   = "YOUR_REPO_NAME";
 const BRANCH = "main";
 
 // -----------------------------------------------------------------
@@ -64,6 +70,8 @@ const SEND_COOLDOWN    = 30 * 1000;      // min gap between sends
 const PUT_MAX_RETRIES  = 5;
 const PUT_BACKOFF_MS   = 150;            // randomized 0..150 between retries
 const CLAIM_SETTLE_MS  = 300;            // re-read delay after claiming a slot
+
+const CURSOR_MS        = 500;            // blink half-period
 
 const API = "https://api.github.com/repos/" + OWNER + "/" + REPO + "/contents/";
 
@@ -146,8 +154,15 @@ export class ChatRoom extends App {
     this._lastUpdate = 0;
     this._lastSend   = 0;
 
-    // Input echo.
-    this.inputText = "";
+    // Cursor blink state. Flips every CURSOR_MS while a field screen
+    // is visible.
+    this._cursorOn     = true;
+    this._cursorTimer  = 0;
+
+    // Input echoes.
+    this._tokenBuffer    = "";
+    this._usernameBuffer = "";
+    this.inputText       = "";
 
     // Back-stack of screen names. Top = current.
     this.stack = ["token"];
@@ -164,6 +179,9 @@ export class ChatRoom extends App {
     this.root.add(this.chatScreen);
 
     this._applyScreen("token");
+    this._refreshTokenField();
+    this._refreshUsernameField();
+    this._refreshChatInput();
   }
 
   // ---------- Token persistence ----------
@@ -185,6 +203,20 @@ export class ChatRoom extends App {
       // localStorage may be unavailable; in-memory token still works.
     }
   }
+
+  // ---------- Field rendering ----------
+
+  // Render a buffer into a label with a trailing cursor glyph. When
+  // the cursor is in its "off" half of the blink, the trailing slot
+  // is a space so the label width does not jitter.
+  _renderField(label, buffer) {
+    if (!label) return;
+    label.setText(buffer + (this._cursorOn ? "|" : " "));
+  }
+
+  _refreshTokenField()    { this._renderField(this.tokenFieldLabel,    this._tokenBuffer); }
+  _refreshUsernameField() { this._renderField(this.usernameFieldLabel, this._usernameBuffer); }
+  _refreshChatInput()     { this._renderField(this.inputLabel,         this.inputText); }
 
   // ---------- Screens ----------
 
@@ -212,7 +244,7 @@ export class ChatRoom extends App {
     const cx = W / 2;
 
     screen.add(new Text({
-      x: cx, y: 200,
+      x: cx, y: 180,
       text: "Enter Token:",
       font: "bold 36px sans-serif",
       color: "#d8e4f7",
@@ -223,7 +255,7 @@ export class ChatRoom extends App {
     const fieldW = 720;
     const fieldH = 56;
     const fieldX = cx - fieldW / 2;
-    const fieldY = 260;
+    const fieldY = 240;
 
     const field = new Panel({
       x: fieldX, y: fieldY, w: fieldW, h: fieldH,
@@ -249,7 +281,7 @@ export class ChatRoom extends App {
     field.add(this.tokenFieldLabel);
 
     this.tokenErrorLabel = new Text({
-      x: cx, y: fieldY + fieldH + 28,
+      x: cx, y: fieldY + fieldH + 24,
       text: "",
       font: "16px monospace",
       color: "#e06060",
@@ -258,8 +290,21 @@ export class ChatRoom extends App {
     });
     screen.add(this.tokenErrorLabel);
 
+    // Paste button, above Continue, left-aligned to the field.
     screen.add(new Button({
-      x: cx - 110, y: fieldY + fieldH + 70,
+      x: fieldX, y: fieldY + fieldH + 44,
+      w: 140, h: 44,
+      text: "Paste",
+      fill: "#2a2a3a",
+      stroke: "#5a5a7a",
+      strokeWidth: 2,
+      radius: 8,
+      textOptions: { font: "bold 16px sans-serif", color: "#ffffff" },
+      onClick: () => this._pasteIntoToken(),
+    }));
+
+    screen.add(new Button({
+      x: cx - 110, y: fieldY + fieldH + 100,
       w: 220, h: 56,
       text: "Continue",
       fill: "#2a3552",
@@ -269,9 +314,6 @@ export class ChatRoom extends App {
       textOptions: { font: "bold 20px sans-serif", color: "#ffffff" },
       onClick: () => this._submitToken(),
     }));
-
-    this._tokenBuffer = "";
-    this.tokenFieldLabel.setText("");
 
     return screen;
   }
@@ -357,9 +399,6 @@ export class ChatRoom extends App {
       textOptions: { font: "bold 20px sans-serif", color: "#ffffff" },
       onClick: () => this._submitUsername(),
     }));
-
-    this._usernameBuffer = "";
-    this.usernameFieldLabel.setText("");
 
     return screen;
   }
@@ -460,13 +499,6 @@ export class ChatRoom extends App {
     // The big rectangle: chat log (top-left), user list (right),
     // input row (bottom-left), Send button (bottom-left, right of
     // input row, still inside the rectangle).
-    //
-    //   boxX,boxY,boxW,boxH  ->  outer border of the big rectangle
-    //   userColW             ->  width of the right column (user list)
-    //   inputRowH            ->  height of the bottom input row
-    //
-    // The chat area is (boxW - userColW) wide and (boxH - inputRowH)
-    // tall. The input row spans the full chat-area width.
 
     const boxW = Math.min(W - 120, 1100);
     const boxH = Math.min(H - 180, 620);
@@ -506,8 +538,7 @@ export class ChatRoom extends App {
       stroke: null,
     }));
 
-    // Message lines. No scrolling - oldest get pushed off. We keep a
-    // pool of Text nodes and rewrite the visible slice.
+    // Message lines. No scrolling - oldest get pushed off.
     this._maxLines = Math.floor((boxH - inputRowH - 20) / 22);
 
     this.messageTexts = [];
@@ -585,7 +616,7 @@ export class ChatRoom extends App {
       onClick: () => this._sendMessage(),
     }));
 
-    // Status text - small, top of chat area, for cooldowns/errors.
+    // Status text - small, top of chat area.
     this.statusLabel = new Text({
       x: boxX,
       y: boxY - 26,
@@ -597,7 +628,7 @@ export class ChatRoom extends App {
     });
     screen.add(this.statusLabel);
 
-    // Room title - shows which room.
+    // Room title.
     this.roomTitleLabel = new Text({
       x: boxX + boxW / 2,
       y: boxY - 26,
@@ -620,9 +651,19 @@ export class ChatRoom extends App {
     this.roomScreen.visible     = name === "room";
     this.chatScreen.visible     = name === "chat";
 
+    // Reset cursor to visible when a new screen arrives, so the
+    // user sees it immediately rather than possibly during an off
+    // half-cycle.
+    this._cursorOn    = true;
+    this._cursorTimer = 0;
+
     if (name !== "chat") {
       this._stopTimers();
     }
+
+    this._refreshTokenField();
+    this._refreshUsernameField();
+    this._refreshChatInput();
   }
 
   _pushScreen(name) {
@@ -648,14 +689,13 @@ export class ChatRoom extends App {
   }
 
   _refreshRoomOccupancyPlaceholders() {
-    // Occupancy is shown as "?" until the user joins a room, per
-    // the design decision to avoid 30 reads just for a UI hint.
+    // Occupancy is shown as "?" until the user joins a room.
     for (const name of ROOMS) {
       this.roomButtons[name].setText(ROOM_LABELS[name] + "  ?/10");
     }
   }
 
-  // ---------- Token submit ----------
+  // ---------- Token submit / paste ----------
 
   _submitToken() {
     const tok = this._tokenBuffer.trim();
@@ -666,6 +706,23 @@ export class ChatRoom extends App {
     this.tokenErrorLabel.text = "";
     this._saveToken(tok);
     this._pushScreen("username");
+  }
+
+  async _pasteIntoToken() {
+    if (!navigator.clipboard || !navigator.clipboard.readText) {
+      this.tokenErrorLabel.text = "Paste not available in this browser.";
+      return;
+    }
+    try {
+      const text = await navigator.clipboard.readText();
+      if (text) {
+        this._tokenBuffer = text.trim();
+        this._refreshTokenField();
+        this.tokenErrorLabel.text = "";
+      }
+    } catch (e) {
+      this.tokenErrorLabel.text = "Paste was blocked. Type it manually or allow clipboard access.";
+    }
   }
 
   // ---------- Username submit ----------
@@ -726,15 +783,13 @@ export class ChatRoom extends App {
 
     if (res.status === 401) throw new Error("BAD_TOKEN");
     if (res.status === 409) throw new Error("CONFLICT");
-    if (res.status === 422) throw new Error("CONFLICT"); // sha mismatch often surfaces as 422
+    if (res.status === 422) throw new Error("CONFLICT");
     if (!res.ok) throw new Error("WRITE_FAILED_" + res.status);
 
     const json = await res.json();
     return json.content ? json.content.sha : null;
   }
 
-  // Read all ten slot files of a room. Returns an array of length
-  // SLOTS. Each entry is { clientId, username, iso } or null.
   async _readPresence(room) {
     const out = [];
     for (let s = 0; s < SLOTS; s++) {
@@ -747,7 +802,6 @@ export class ChatRoom extends App {
           if (parsed) rec = parsed;
         }
       } catch (e) {
-        // A failed read for one slot should not take down the room.
         if (e.message === "BAD_TOKEN") throw e;
       }
       out.push(rec);
@@ -756,7 +810,6 @@ export class ChatRoom extends App {
   }
 
   _parseSlot(content) {
-    // Format: clientId \n username \n iso
     const parts = content.split("\n");
     if (parts.length < 3) return null;
     const clientId = parts[0].trim();
@@ -786,12 +839,8 @@ export class ChatRoom extends App {
     const anyFresh = presence.some(p => p && isFresh(p.iso));
 
     if (!anyFresh) {
-      // Room is dead. Wipe the log and all presence files, then
-      // claim slot 0. Two simultaneous joiners both attempt the wipe;
-      // empty-over-empty is idempotent and harmless.
       this._setStatus("Resetting dead room...");
 
-      // Wipe log.
       try {
         const log = await this._readFile("data/" + room + "/log.txt");
         if (log && log.content !== "") {
@@ -807,11 +856,8 @@ export class ChatRoom extends App {
           this._handleApiError(e, "reset log");
           return;
         }
-        // Conflict on reset is fine; someone else is resetting.
       }
 
-      // Wipe all slots that are non-empty. We only need to clear
-      // ones with content; empty ones are already fine.
       for (let s = 0; s < SLOTS; s++) {
         const path = "data/" + room + "/presence/slot" + s + ".txt";
         if (!presence[s]) continue;
@@ -825,11 +871,9 @@ export class ChatRoom extends App {
             this._handleApiError(e, "reset presence");
             return;
           }
-          // Ignore other errors on wipe; we will re-read anyway.
         }
       }
 
-      // Re-read after wipe so our slot scan sees the clean state.
       try {
         presence = await this._readPresence(room);
       } catch (e) {
@@ -853,12 +897,11 @@ export class ChatRoom extends App {
 
     this.roomTitleLabel.text = ROOM_LABELS[room];
     this.inputText = "";
-    this.inputLabel.setText("");
+    this._refreshChatInput();
 
     this._pushScreen("chat");
     this._clearStatus();
 
-    // Initial sync, then timers.
     try {
       await this._sync();
     } catch (e) {
@@ -867,25 +910,20 @@ export class ChatRoom extends App {
     this._startTimers();
   }
 
-  // Find the lowest free slot, write ourselves into it, re-read to
-  // confirm ownership. Returns the slot index or null if full.
   async _claimSlot(room, presence) {
     for (let s = 0; s < SLOTS; s++) {
       const cur = presence[s];
       if (cur && isFresh(cur.iso) && cur.clientId !== this.clientId) {
-        continue; // occupied by someone else
+        continue;
       }
-      // Free or stale. Try to claim it.
       const path = "data/" + room + "/presence/slot" + s + ".txt";
 
-      // Read current sha so we can write (may be stale-record sha).
       let sha = null;
       try {
         const r = await this._readFile(path);
         if (r) sha = r.sha;
       } catch (e) {
         if (e.message === "BAD_TOKEN") throw e;
-        // Otherwise treat as no file; the write may 422 and we retry.
       }
 
       try {
@@ -897,11 +935,9 @@ export class ChatRoom extends App {
         );
       } catch (e) {
         if (e.message === "BAD_TOKEN") throw e;
-        // Conflict or race; try the next slot.
         continue;
       }
 
-      // Settle and confirm.
       await this._sleep(CLAIM_SETTLE_MS);
 
       let confirm;
@@ -917,7 +953,6 @@ export class ChatRoom extends App {
       if (parsed && parsed.clientId === this.clientId) {
         return s;
       }
-      // Someone raced us. Try next slot.
     }
     return null;
   }
@@ -926,15 +961,12 @@ export class ChatRoom extends App {
 
   async _leaveRoom() {
     await this._leaveRoomInternal();
-    // Walk the stack back to the room list.
     while (this.stack.length > 1 && this.stack[this.stack.length - 1] !== "room") {
       this.stack.pop();
     }
     this._applyScreen("room");
   }
 
-  // Clear our own slot. Best-effort: if it fails, the staleness
-  // rule will eventually clear it.
   async _leaveRoomInternal() {
     this._stopTimers();
 
@@ -949,13 +981,12 @@ export class ChatRoom extends App {
         const r = await this._readFile(path);
         if (r && r.content) {
           const parsed = this._parseSlot(r.content);
-          // Only clear if it is still ours.
           if (parsed && parsed.clientId === this.clientId) {
             await this._writeFile(path, "", r.sha, "leave slot " + slot);
           }
         }
       } catch (e) {
-        // Best-effort. Staleness handles the rest.
+        // Best-effort.
       }
     }
   }
@@ -990,8 +1021,6 @@ export class ChatRoom extends App {
         const r = await this._readFile(path);
         if (!r) return;
         const parsed = this._parseSlot(r.content);
-        // Only beat if the slot is still ours. If someone else took
-        // it, stop beating; we are effectively evicted.
         if (!parsed || parsed.clientId !== this.clientId) {
           this._setStatus("Your slot was taken. Leaving...");
           await this._leaveRoom();
@@ -1037,7 +1066,6 @@ export class ChatRoom extends App {
   async _sync() {
     if (this.room === null) return;
 
-    // Read the log.
     let logRead;
     try {
       logRead = await this._readFile("data/" + this.room + "/log.txt");
@@ -1059,7 +1087,6 @@ export class ChatRoom extends App {
       this.messages.push(parsed);
     }
 
-    // Read presence.
     let presence;
     try {
       presence = await this._readPresence(this.room);
@@ -1081,7 +1108,6 @@ export class ChatRoom extends App {
   }
 
   _parseMessageLine(line) {
-    // username|ISO8601|text
     const first = line.indexOf("|");
     if (first < 0) return null;
     const second = line.indexOf("|", first + 1);
@@ -1094,7 +1120,6 @@ export class ChatRoom extends App {
   }
 
   _renderMessages() {
-    // Show the last N messages, oldest at top.
     const n = this.messages.length;
     const start = Math.max(0, n - this._maxLines);
     const slice = this.messages.slice(start);
@@ -1107,9 +1132,6 @@ export class ChatRoom extends App {
         t.color = "#d8e4f7";
         continue;
       }
-      // Format: "[HH:MM] username: text". We render as one string
-      // in monospace. Coloring the pieces separately would need
-      // multiple Text nodes per line; not worth it for now.
       t.text = "[" + hhmm(m.iso) + "] " + m.username + ": " + m.text;
       t.color = (m.username === this.username) ? "#6aa9ff" : "#d8e4f7";
     }
@@ -1146,7 +1168,6 @@ export class ChatRoom extends App {
       return;
     }
 
-    // Strip pipe and newline so the line format stays parseable.
     const safe = text.replace(/\|/g, "/").replace(/\n/g, " ").replace(/\r/g, " ");
     const line = this.username + "|" + nowIso() + "|" + safe + "\n";
 
@@ -1163,11 +1184,9 @@ export class ChatRoom extends App {
 
         this._lastSend = now;
         this.inputText = "";
-        this.inputLabel.setText("");
+        this._refreshChatInput();
         this._clearStatus();
 
-        // Optimistic local echo, then sync to pick up anyone else's
-        // messages that landed since our read.
         await this._sync();
         return;
       } catch (e) {
@@ -1198,11 +1217,11 @@ export class ChatRoom extends App {
     const top = this.stack[this.stack.length - 1];
 
     if (top === "token") {
-      this._handleFieldKey(e, "_tokenBuffer", this.tokenFieldLabel);
+      this._handleTokenKey(e);
       return;
     }
     if (top === "username") {
-      this._handleFieldKey(e, "_usernameBuffer", this.usernameFieldLabel);
+      this._handleUsernameKey(e);
       return;
     }
     if (top === "chat") {
@@ -1211,27 +1230,42 @@ export class ChatRoom extends App {
     }
   }
 
-  _handleFieldKey(e, bufName, label) {
+  _handleTokenKey(e) {
     if (e.key === "Backspace") {
-      this[bufName] = this[bufName].slice(0, -1);
-      label.setText(this[bufName]);
+      this._tokenBuffer = this._tokenBuffer.slice(0, -1);
+      this._refreshTokenField();
       return;
     }
     if (e.key === "Enter") {
-      if (bufName === "_tokenBuffer")    this._submitToken();
-      if (bufName === "_usernameBuffer") this._submitUsername();
+      this._submitToken();
       return;
     }
     if (e.key.length === 1) {
-      this[bufName] += e.key;
-      label.setText(this[bufName]);
+      this._tokenBuffer += e.key;
+      this._refreshTokenField();
+    }
+  }
+
+  _handleUsernameKey(e) {
+    if (e.key === "Backspace") {
+      this._usernameBuffer = this._usernameBuffer.slice(0, -1);
+      this._refreshUsernameField();
+      return;
+    }
+    if (e.key === "Enter") {
+      this._submitUsername();
+      return;
+    }
+    if (e.key.length === 1) {
+      this._usernameBuffer += e.key;
+      this._refreshUsernameField();
     }
   }
 
   _handleChatKey(e) {
     if (e.key === "Backspace") {
       this.inputText = this.inputText.slice(0, -1);
-      this.inputLabel.setText(this.inputText);
+      this._refreshChatInput();
       return;
     }
     if (e.key === "Enter") {
@@ -1240,7 +1274,7 @@ export class ChatRoom extends App {
     }
     if (e.key.length === 1) {
       this.inputText += e.key;
-      this.inputLabel.setText(this.inputText);
+      this._refreshChatInput();
     }
   }
 
@@ -1268,7 +1302,7 @@ export class ChatRoom extends App {
       this._applyScreen("token");
       this.tokenErrorLabel.text = "That token did not work. Check it and try again.";
       this._tokenBuffer = "";
-      this.tokenFieldLabel.setText("");
+      this._refreshTokenField();
       return;
     }
     this._setStatus("Error during " + where + ": " + (e && e.message ? e.message : "unknown"));
@@ -1282,8 +1316,20 @@ export class ChatRoom extends App {
   // ---------- App lifecycle ----------
 
   update(dt) {
-    // Nothing per-frame. All timing is via setInterval.
-  }
+    // Cursor blink. Only runs while a field-bearing screen is up.
+    const top = this.stack[this.stack.length - 1];
+    if (top !== "token" && top !== "username" && top !== "chat") return;
 
-  _clearStatusUnused() {}
+    this._cursorTimer += dt * 1000;
+    if (this._cursorTimer >= CURSOR_MS) {
+      this._cursorTimer -= CURSOR_MS;
+      this._cursorOn = !this._cursorOn;
+
+      // Only redraw the field that is actually visible on the
+      // current screen, to keep this cheap.
+      if (top === "token")    this._refreshTokenField();
+      if (top === "username") this._refreshUsernameField();
+      if (top === "chat")     this._refreshChatInput();
+    }
+  }
 }
