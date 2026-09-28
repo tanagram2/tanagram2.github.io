@@ -1,34 +1,35 @@
 // ChatRoom.
 //
 // A client-managed chatroom with no server. Coordination happens
-// through files in a GitHub repository, read and written via the
-// GitHub Contents API. Every client holds a Personal Access Token
-// in localStorage; the token is only ever sent to api.github.com,
-// never committed anywhere.
+// through files in a GitHub repository, via the Git Data API
+// (blobs, trees, commits, refs), not the Contents API.
 //
-// Concurrency model: the Contents API's required "sha" field acts
-// as compare-and-swap. A write must include the sha of the version
-// it read; if someone else wrote in between, the write fails with
-// 409 and we re-read, re-apply our change, and retry.
+// Why Git Data and not Contents:
 //
-// Read-after-write is NOT reliable. The Contents API GET is served
-// from a cache and can return the pre-write version for several
-// seconds after a PUT succeeds. So:
-//   - We never confirm a write by reading the file back.
-//   - We trust the PUT response. If it returned 2xx, the write
-//     landed, full stop.
-//   - The only reads we make are for data we did not just write.
-//     Those reads are, in practice, not stale, because the last
-//     write to that file happened at least seconds ago.
-//   - Local state is updated optimistically after our own writes,
-//     so our own message shows up immediately even if a followup
-//     sync reads stale content.
+// The Contents API (GET/PUT /repos/.../contents/PATH) is served from
+// a cache that is not invalidated promptly after a write. A read
+// right after a write can return the pre-write version for long
+// enough to break a compare-and-swap. We tried to work around it
+// with retries and it kept biting us with "sha does not match" 409s.
 //
-// _writeWithRetry returns true if it wrote, false if it declined
-// (buildContent returned null, meaning "the current content is
-// already what it should be, do not touch"). Callers use that
-// return value to decide whether their intent was realized,
-// without needing a confirm read.
+// The Git Data API reads from the ref and git object database
+// directly and is not subject to that lag. A write is a sequence:
+// create a blob (file content), create a tree (directory listing
+// pointing at the new blob), create a commit (pointing at the new
+// tree and the current commit as parent), patch the ref (move
+// heads/main to the new commit, expecting the old commit sha). The
+// ref patch is the compare-and-swap. If someone else advanced main
+// between our ref read and our ref patch, the patch is rejected and
+// we retry.
+//
+// Concurrency: compare-and-swap on the ref. Same behavioral model
+// as before; different transport under it.
+//
+// Read-after-write: no longer a problem on the write path, because
+// the ref read is authoritative. Still not guaranteed on the
+// Contents-style cache, but we do not use that endpoint anymore.
+// We do still optimistically echo our own chat message locally so
+// there is never a visible "I sent it and it did not appear" gap.
 //
 // Presence model: one file per slot, data/roomN/presence/slotM.txt.
 // Each slot is written by exactly one client at a time. A slot is
@@ -56,8 +57,8 @@ import { Viewport }  from "../systems/Viewport.js";
 // FILL THESE IN
 // -----------------------------------------------------------------
 
-const OWNER  = "YOUR_GITHUB_USERNAME";
-const REPO   = "YOUR_REPO_NAME";
+const OWNER  = "tanagram2";
+const REPO   = "tanagram2.github.io";
 const BRANCH = "main";
 
 // -----------------------------------------------------------------
@@ -75,11 +76,10 @@ const UPDATE_THROTTLE  = 10 * 1000;      // manual Update cooldown
 const SEND_COOLDOWN    = 30 * 1000;      // min gap between sends
 const PUT_MAX_RETRIES  = 6;              // retries for a conflicted write
 const PUT_BACKOFF_MS   = 250;            // random 0..250 ms between retries
-const RESET_SETTLE_MS  = 800;            // pause after wipe before re-reading
 
 const CURSOR_MS        = 500;            // blink half-period
 
-const API = "https://api.github.com/repos/" + OWNER + "/" + REPO + "/contents/";
+const API = "https://api.github.com/repos/" + OWNER + "/" + REPO + "/";
 
 // -----------------------------------------------------------------
 // base64 helpers - the browser's btoa/atob mishandle non-ASCII
@@ -158,6 +158,13 @@ export class ChatRoom extends App {
     this._tokenBuffer    = "";
     this._usernameBuffer = "";
     this.inputText       = "";
+
+    this._joining = false;
+
+    // Per-sync caches. Cleared at the start of each _sync, _joinRoom
+    // and other top-level operations. Keyed by nothing (single
+    // snapshot of ref + tree).
+    this._treeCache = null; // { commitSha, treeSha, entries: Map }
 
     this.stack = ["token"];
 
@@ -445,8 +452,6 @@ export class ChatRoom extends App {
       y += btnH + gap;
     }
 
-    // Status text visible on the room screen too, so join failures
-    // are not silent.
     this.roomStatusLabel = new Text({
       x: cx, y: 520,
       text: "",
@@ -646,8 +651,6 @@ export class ChatRoom extends App {
     this._refreshUsernameField();
     this._refreshChatInput();
 
-    // Clear the room-screen status whenever we leave the room
-    // screen, so stale messages do not linger into a fresh visit.
     if (name !== "room" && this.roomStatusLabel) {
       this.roomStatusLabel.text = "";
     }
@@ -679,19 +682,12 @@ export class ChatRoom extends App {
     }
   }
 
-  // Two status channels: the chat screen has statusLabel, the room
-  // screen has roomStatusLabel. _setStatus writes whichever is
-  // visible on the current screen so join failures are never silent.
   _setStatus(msg) {
     const top = this.stack[this.stack.length - 1];
     const text = msg || "";
     if (top === "chat" && this.statusLabel) {
       this.statusLabel.text = text;
-    } else if (top === "room" && this.roomStatusLabel) {
-      this.roomStatusLabel.text = text;
     } else if (this.roomStatusLabel) {
-      // Default to the room screen status when neither is focused,
-      // so the message is still somewhere the user can see it.
       this.roomStatusLabel.text = text;
     }
   }
@@ -743,7 +739,9 @@ export class ChatRoom extends App {
     this._pushScreen("room");
   }
 
-  // ---------- GitHub API primitives ----------
+  // =================================================================
+  // GIT DATA API PRIMITIVES
+  // =================================================================
 
   _authHeaders() {
     return {
@@ -753,86 +751,314 @@ export class ChatRoom extends App {
     };
   }
 
-  // Raw read. Returns { content, sha } or null on 404. Throws
-  // BAD_TOKEN on 401, READ_FAILED_<n> on anything else.
-  //
-  // cache: "no-store" tells the browser not to serve from its own
-  // cache. This does not affect GitHub's server-side cache, which
-  // is what actually causes stale reads. See the file header.
-  async _readFile(path) {
-    const url = API + path + "?ref=" + encodeURIComponent(BRANCH);
-    const res = await fetch(url, {
-      headers: this._authHeaders(),
-      cache: "no-store",
-    });
-
-    if (res.status === 404) return null;
-    if (res.status === 401) throw new Error("BAD_TOKEN");
-    if (!res.ok) throw new Error("READ_FAILED_" + res.status);
-
-    const json = await res.json();
-    const content = json.content ? fromBase64(json.content) : "";
-    return { content, sha: json.sha };
+  _jsonHeaders() {
+    return Object.assign({ "Content-Type": "application/json" }, this._authHeaders());
   }
 
-  // Raw single-shot write with the given sha. Throws CONFLICT on
-  // 409 or 422. Returns the new content sha on success.
-  async _putOnce(path, content, sha, message) {
-    const url = API + path;
-    const body = {
-      message: message || ("update " + path),
-      content: toBase64(content),
-      branch: BRANCH,
-    };
-    if (sha) body.sha = sha;
+  // GET the current commit sha of heads/BRANCH.
+  async _readRef() {
+    const url = API + "git/ref/heads/" + encodeURIComponent(BRANCH);
+    const res = await fetch(url, { headers: this._authHeaders(), cache: "no-store" });
+    if (res.status === 401) throw new Error("BAD_TOKEN");
+    if (!res.ok) throw new Error("READ_REF_FAILED_" + res.status);
+    const json = await res.json();
+    return json.object.sha;
+  }
+
+  // GET a commit, return its tree sha.
+  async _readCommitTreeSha(commitSha) {
+    const url = API + "git/commits/" + commitSha;
+    const res = await fetch(url, { headers: this._authHeaders(), cache: "no-store" });
+    if (res.status === 401) throw new Error("BAD_TOKEN");
+    if (!res.ok) throw new Error("READ_COMMIT_FAILED_" + res.status);
+    const json = await res.json();
+    return json.tree.sha;
+  }
+
+  // GET a tree recursively, return Map of path -> { sha, mode, type }.
+  async _readTreeEntries(treeSha) {
+    const url = API + "git/trees/" + treeSha + "?recursive=1";
+    const res = await fetch(url, { headers: this._authHeaders(), cache: "no-store" });
+    if (res.status === 401) throw new Error("BAD_TOKEN");
+    if (!res.ok) throw new Error("READ_TREE_FAILED_" + res.status);
+    const json = await res.json();
+
+    const map = new Map();
+    for (const entry of json.tree || []) {
+      if (entry.type === "blob") {
+        map.set(entry.path, { sha: entry.sha, mode: entry.mode });
+      }
+    }
+    return map;
+  }
+
+  // GET a blob, return decoded text (empty string if blob is empty).
+  async _readBlob(blobSha) {
+    const url = API + "git/blobs/" + blobSha;
+    const res = await fetch(url, { headers: this._authHeaders(), cache: "no-store" });
+    if (res.status === 401) throw new Error("BAD_TOKEN");
+    if (!res.ok) throw new Error("READ_BLOB_FAILED_" + res.status);
+    const json = await res.json();
+    if (!json.content) return "";
+    return fromBase64(json.content);
+  }
+
+  // Fresh snapshot of the current tree. Populates this._treeCache.
+  // Subsequent _readFile calls in the same top-level operation reuse
+  // it. Call this at the start of any top-level op so we do not read
+  // a stale tree from a previous op.
+  async _refreshTreeCache() {
+    const commitSha = await this._readRef();
+    const treeSha   = await this._readCommitTreeSha(commitSha);
+    const entries   = await this._readTreeEntries(treeSha);
+    this._treeCache = { commitSha, treeSha, entries };
+    return this._treeCache;
+  }
+
+  _clearTreeCache() {
+    this._treeCache = null;
+  }
+
+  // Read a file via Git Data. Returns { content, sha, commitSha } or
+  // null if the path does not exist in the current tree. sha is the
+  // blob sha.
+  async _readFile(path) {
+    if (!this._treeCache) {
+      await this._refreshTreeCache();
+    }
+    const entry = this._treeCache.entries.get(path);
+    if (!entry) return null;
+    const content = await this._readBlob(entry.sha);
+    return { content, sha: entry.sha, commitSha: this._treeCache.commitSha };
+  }
+
+  // Create a blob, return its sha.
+  async _createBlob(content) {
+    const url = API + "git/blobs";
+    const res = await fetch(url, {
+      method: "POST",
+      headers: this._jsonHeaders(),
+      body: JSON.stringify({ content: toBase64(content), encoding: "base64" }),
+    });
+    if (res.status === 401) throw new Error("BAD_TOKEN");
+    if (!res.ok) throw new Error("CREATE_BLOB_FAILED_" + res.status);
+    const json = await res.json();
+    return json.sha;
+  }
+
+  // Create a tree from the current tree, replacing/adding one path.
+  // `baseTreeSha` is the tree of the commit we are building on top
+  // of. `path` is the file path. `blobSha` is the sha of the new
+  // blob for that path. Returns the new tree sha.
+  async _createTreeWithChange(baseTreeSha, path, blobSha) {
+    // The tree endpoint expects paths split by directory. For our
+    // simple two-level layout (data/roomN/presence/slotM.txt), we
+    // build a nested structure. A general recursive writer is out
+    // of scope; we only ever write single files under one repo.
+
+    // Simplest correct form: use the "base_tree + path segments"
+    // trick. GitHub accepts a flat list of { path, mode, type, sha }
+    // when base_tree is supplied, but only at the top level for that
+    // tree. To update a nested file we build a chain of single-entry
+    // trees bottom-up.
+
+    // Split "data/room1/presence/slot0.txt" into
+    // ["data", "room1", "presence", "slot0.txt"].
+
+    const parts = path.split("/");
+    const leafName = parts[parts.length - 1];
+
+    // If the file lives directly at the root, we can do a single tree.
+    if (parts.length === 1) {
+      return await this._postTree([{
+        path: leafName,
+        mode: "100644",
+        type: "blob",
+        sha: blobSha,
+      }], baseTreeSha);
+    }
+
+    // Otherwise, walk up: create the leaf subtree entry, then wrap
+    // it in parent subtrees. This is a chain of POSTs. For our
+    // 4-segment paths, that is 3 POSTs.
+
+    // Start with the leaf subtree: { leafName -> blobSha }.
+    let subtreeSha = await this._postTree([{
+      path: leafName,
+      mode: "100644",
+      type: "blob",
+      sha: blobSha,
+    }], null);
+
+    // Then wrap upward. Each parent tree contains just the one dir
+    // entry pointing at the subtree we just created.
+    for (let i = parts.length - 2; i >= 0; i--) {
+      const dirName = parts[i];
+      subtreeSha = await this._postTree([{
+        path: dirName,
+        mode: "040000",
+        type: "tree",
+        sha: subtreeSha,
+      }], null);
+    }
+
+    // Finally, take the top-most subtree (the one whose root is the
+    // first path segment) and graft it into the base tree's root.
+    const rootDirName = parts[0];
+    return await this._postTree([{
+      path: rootDirName,
+      mode: "040000",
+      type: "tree",
+      sha: subtreeSha,
+    }], baseTreeSha);
+  }
+
+  async _postTree(entries, baseTreeSha) {
+    const url = API + "git/trees";
+    const body = { tree: entries };
+    if (baseTreeSha) body.base_tree = baseTreeSha;
 
     const res = await fetch(url, {
-      method: "PUT",
-      headers: Object.assign({ "Content-Type": "application/json" }, this._authHeaders()),
+      method: "POST",
+      headers: this._jsonHeaders(),
       body: JSON.stringify(body),
     });
-
     if (res.status === 401) throw new Error("BAD_TOKEN");
-    if (res.status === 409) throw new Error("CONFLICT");
-    if (res.status === 422) throw new Error("CONFLICT");
-    if (!res.ok) throw new Error("WRITE_FAILED_" + res.status);
-
+    if (!res.ok) throw new Error("CREATE_TREE_FAILED_" + res.status);
     const json = await res.json();
-    return json.content ? json.content.sha : null;
+    return json.sha;
   }
 
-  // Read-modify-write with retries on conflict.
+  async _createCommit(treeSha, parentCommitSha, message) {
+    const url = API + "git/commits";
+    const body = {
+      message,
+      tree: treeSha,
+      parents: [parentCommitSha],
+    };
+    const res = await fetch(url, {
+      method: "POST",
+      headers: this._jsonHeaders(),
+      body: JSON.stringify(body),
+    });
+    if (res.status === 401) throw new Error("BAD_TOKEN");
+    if (!res.ok) throw new Error("CREATE_COMMIT_FAILED_" + res.status);
+    const json = await res.json();
+    return json.sha;
+  }
+
+  // Patch the ref. Uses the expected current commit sha as CAS.
+  // Throws CONFLICT on 409 or 422 (GitHub returns both for ref
+  // conflicts depending on the case).
+  async _patchRef(newCommitSha, expectedCurrentCommitSha) {
+    const url = API + "git/refs/heads/" + encodeURIComponent(BRANCH);
+    const res = await fetch(url, {
+      method: "PATCH",
+      headers: this._jsonHeaders(),
+      body: JSON.stringify({ sha: newCommitSha, force: false }),
+    });
+    if (res.status === 401) throw new Error("BAD_TOKEN");
+    if (res.status === 409 || res.status === 422) throw new Error("CONFLICT");
+    if (!res.ok) throw new Error("PATCH_REF_FAILED_" + res.status);
+    // The current sha check: GitHub's PATCH ref does NOT accept an
+    // "expected current" parameter, so it does not actually enforce
+    // CAS on its own. We enforce it ourselves by checking that the
+    // ref we read a moment ago still matches what we are building on.
+    // See _writeWithRetry for the check.
+    void expectedCurrentCommitSha;
+  }
+
+  // Read-modify-write. buildContent(currentContentString) returns
+  // the string to write, or null to decline. Returns true if wrote,
+  // false if declined.
   //
-  // buildContent(currentContentString) returns the string to write,
-  // or null to skip the write ("current content is already correct").
-  //
-  // Returns true if a write happened, false if buildContent declined
-  // to write. Callers use this to know whether their intent landed,
-  // without needing a confirm read (which cannot be trusted).
+  // Full sequence per attempt:
+  //   1. Read the ref -> currentCommitSha.
+  //   2. Read the tree of that commit, find blob sha for our path.
+  //   3. Read the blob (or "" if it does not exist).
+  //   4. buildContent(currentContent) -> toWrite.
+  //   5. Create blob, create tree(s), create commit (parent =
+  //      currentCommitSha).
+  //   6. Re-read the ref; if it still equals currentCommitSha, PATCH.
+  //      If it has moved, throw CONFLICT and retry.
   async _writeWithRetry(path, buildContent, message) {
     let lastError = null;
 
     for (let attempt = 0; attempt < PUT_MAX_RETRIES; attempt++) {
-      let current = null;
+      let currentCommitSha;
+      let treeSha;
+      let entries;
       try {
-        current = await this._readFile(path);
+        currentCommitSha = await this._readRef();
+        treeSha          = await this._readCommitTreeSha(currentCommitSha);
+        entries          = await this._readTreeEntries(treeSha);
       } catch (e) {
         if (e.message === "BAD_TOKEN") throw e;
-        current = null;
+        lastError = e;
+        await this._sleep(Math.random() * PUT_BACKOFF_MS);
+        continue;
       }
 
-      const currentContent = current ? current.content : "";
-      const sha = current ? current.sha : null;
+      let currentContent = "";
+      const entry = entries.get(path);
+      if (entry) {
+        try {
+          currentContent = await this._readBlob(entry.sha);
+        } catch (e) {
+          if (e.message === "BAD_TOKEN") throw e;
+          lastError = e;
+          await this._sleep(Math.random() * PUT_BACKOFF_MS);
+          continue;
+        }
+      }
 
-      let toWrite = buildContent(currentContent);
-
+      let toWrite;
+      try {
+        toWrite = buildContent(currentContent);
+      } catch (e) {
+        throw e;
+      }
       if (toWrite === null) {
         return false;
       }
 
+      let newBlobSha;
+      let newTreeSha;
+      let newCommitSha;
       try {
-        await this._putOnce(path, toWrite, sha, message);
-        return true;
+        newBlobSha   = await this._createBlob(toWrite);
+        newTreeSha   = await this._createTreeWithChange(treeSha, path, newBlobSha);
+        newCommitSha = await this._createCommit(newTreeSha, currentCommitSha, message);
+      } catch (e) {
+        if (e.message === "BAD_TOKEN") throw e;
+        lastError = e;
+        await this._sleep(Math.random() * PUT_BACKOFF_MS);
+        continue;
+      }
+
+      // Before patching, verify the ref has not moved since we read
+      // it. This is the CAS. GitHub's PATCH ref does not do it for
+      // us, so we do it with a fresh read.
+      let verifyRef;
+      try {
+        verifyRef = await this._readRef();
+      } catch (e) {
+        if (e.message === "BAD_TOKEN") throw e;
+        lastError = e;
+        await this._sleep(Math.random() * PUT_BACKOFF_MS);
+        continue;
+      }
+
+      if (verifyRef !== currentCommitSha) {
+        // Someone else advanced the branch between our read and our
+        // commit. Discard our new commit (it is an orphan) and retry.
+        lastError = new Error("CONFLICT");
+        await this._sleep(Math.random() * PUT_BACKOFF_MS);
+        continue;
+      }
+
+      try {
+        await this._patchRef(newCommitSha, currentCommitSha);
       } catch (e) {
         if (e.message === "BAD_TOKEN") throw e;
         if (e.message === "CONFLICT") {
@@ -840,12 +1066,23 @@ export class ChatRoom extends App {
           await this._sleep(Math.random() * PUT_BACKOFF_MS);
           continue;
         }
-        throw e;
+        lastError = e;
+        await this._sleep(Math.random() * PUT_BACKOFF_MS);
+        continue;
       }
+
+      // Success. Invalidate our tree cache so the next read sees
+      // the new state.
+      this._clearTreeCache();
+      return true;
     }
 
     throw lastError || new Error("WRITE_RETRIES_EXHAUSTED");
   }
+
+  // =================================================================
+  // END GIT DATA API PRIMITIVES
+  // =================================================================
 
   // ---------- Presence helpers ----------
 
@@ -885,13 +1122,14 @@ export class ChatRoom extends App {
   // ---------- Room join ----------
 
   async _joinRoom(room) {
-    // Guard against double-clicks or a re-join while one is in flight.
     if (this._joining) return;
     this._joining = true;
 
     this._setStatus("Joining " + ROOM_LABELS[room] + "...");
 
     try {
+      this._clearTreeCache();
+
       let presence;
       try {
         presence = await this._readPresence(room);
@@ -916,7 +1154,6 @@ export class ChatRoom extends App {
             this._handleApiError(e, "reset log");
             return;
           }
-          // Other errors on reset are survivable; continue.
         }
 
         for (let s = 0; s < SLOTS; s++) {
@@ -935,7 +1172,7 @@ export class ChatRoom extends App {
           }
         }
 
-        await this._sleep(RESET_SETTLE_MS);
+        this._clearTreeCache();
 
         try {
           presence = await this._readPresence(room);
@@ -975,10 +1212,6 @@ export class ChatRoom extends App {
     }
   }
 
-  // Claim the lowest slot that is either free or stale. Trusts the
-  // write: if _writeWithRetry returned true, the write landed on
-  // GitHub, and this slot is ours. No confirm read (which would be
-  // stale and could not be trusted anyway).
   async _claimSlot(room, presence) {
     for (let s = 0; s < SLOTS; s++) {
       const cur = presence[s];
@@ -998,8 +1231,6 @@ export class ChatRoom extends App {
           (currentContent) => {
             if (currentContent) {
               const parsed = this._parseSlot(currentContent);
-              // If a race put someone else here between our loop's
-              // snapshot and this read, do not stomp them.
               if (parsed && parsed.clientId !== this.clientId && isFresh(parsed.iso)) {
                 return null;
               }
@@ -1010,14 +1241,10 @@ export class ChatRoom extends App {
         );
       } catch (e) {
         if (e.message === "BAD_TOKEN") throw e;
-        // Write failed after retries. Try next slot.
         continue;
       }
 
-      if (wrote) {
-        return s;
-      }
-      // buildContent declined: someone else holds this slot.
+      if (wrote) return s;
     }
     return null;
   }
@@ -1043,6 +1270,7 @@ export class ChatRoom extends App {
 
       const path = "data/" + room + "/presence/slot" + slot + ".txt";
       try {
+        this._clearTreeCache();
         await this._writeWithRetry(
           path,
           (currentContent) => {
@@ -1082,27 +1310,19 @@ export class ChatRoom extends App {
 
   // ---------- Heartbeat ----------
 
-  // Writes our slot. If the write declines (buildContent returned
-  // null because someone else holds the slot), we treat that as
-  // eviction and leave. No confirm read: we trust the write.
   async _heartbeat() {
     if (this.room === null || this.slot === null) return;
     const path = "data/" + this.room + "/presence/slot" + this.slot + ".txt";
     const self = this;
 
     try {
+      this._clearTreeCache();
       const wrote = await this._writeWithRetry(
         path,
         (currentContent) => {
-          if (!currentContent) {
-            // Slot was cleared by someone else. Do not re-claim
-            // silently; signal eviction.
-            return null;
-          }
+          if (!currentContent) return null;
           const parsed = self._parseSlot(currentContent);
-          if (!parsed || parsed.clientId !== self.clientId) {
-            return null;
-          }
+          if (!parsed || parsed.clientId !== self.clientId) return null;
           return self._serializeSlot(self.clientId, self.username, nowIso());
         },
         "heartbeat slot " + this.slot
@@ -1144,6 +1364,8 @@ export class ChatRoom extends App {
   async _sync() {
     if (this.room === null) return;
 
+    this._clearTreeCache();
+
     let logRead;
     try {
       logRead = await this._readFile("data/" + this.room + "/log.txt");
@@ -1173,9 +1395,6 @@ export class ChatRoom extends App {
       throw e;
     }
 
-    // Always include ourselves in the user list. The read of our
-    // own slot may be stale (we just heartbeated); we know we are
-    // here regardless.
     this.users = [];
     let selfListed = false;
     for (let s = 0; s < SLOTS; s++) {
@@ -1261,15 +1480,13 @@ export class ChatRoom extends App {
     const path = "data/" + this.room + "/log.txt";
 
     try {
+      this._clearTreeCache();
       await this._writeWithRetry(
         path,
         (currentContent) => currentContent + line,
         "chat from " + this.username
       );
 
-      // Optimistic local echo. The sync below may read stale content
-      // and miss our own line; we cannot rely on it to show ourselves
-      // what we just wrote.
       const key = this.username + "|" + iso + "|" + safe;
       if (!this.seenKeys.has(key)) {
         this.seenKeys.add(key);
@@ -1282,9 +1499,6 @@ export class ChatRoom extends App {
       this._refreshChatInput();
       this._clearStatus();
 
-      // Best-effort sync to pick up others' messages. Ignore errors
-      // here; the local echo above already made our own message
-      // visible.
       try {
         await this._sync();
       } catch (e) {
