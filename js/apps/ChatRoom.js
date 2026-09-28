@@ -19,8 +19,13 @@
 //
 // All git traffic on this client goes through one serialized chain
 // (_serialize). This prevents the heartbeat and the sync from
-// racing each other, which is what produced most conflicts when
-// only one human is present.
+// racing each other.
+//
+// Tree writes use ONE POST with the full nested path. The tree
+// endpoint resolves intermediate directories when base_tree is
+// supplied. Do NOT hand-roll the directory chain - the previous
+// version wrapped the top-level dir twice and wrote files to
+// data/data/roomN/... which made every room look empty.
 //
 // Presence model: one file per slot, data/roomN/presence/slotM.txt.
 // A slot is "occupied" if its content is non-empty and its
@@ -28,9 +33,6 @@
 // heartbeat does not make a live client look gone). "Fresh" is the
 // stricter STALE_MS used for display. A room is "dead" if no slot
 // is occupied.
-//
-// Heartbeat is 30s, well under OCCUPIED_MS of 240s. Slots stay
-// occupied as long as at least one heartbeat lands every 4 minutes.
 //
 // Dead-room detection is two-phase: read presence, and if no slot
 // is occupied, wait 1s and read again. Only if the second read also
@@ -74,7 +76,7 @@ const SLOTS = 10;
 
 const STALE_MS         = 2 * 60 * 1000;  // 2 min: heartbeat freshness for display
 const OCCUPIED_MS      = 4 * 60 * 1000;  // 4 min: join-time "is someone here"
-const HEARTBEAT_MS     = 30 * 1000;      // every 30s, well under both thresholds
+const HEARTBEAT_MS     = 30 * 1000;      // every 30s
 const SYNC_MS          = 60 * 1000;      // periodic sync
 const UPDATE_THROTTLE  = 10 * 1000;      // manual Update cooldown
 const SEND_COOLDOWN    = 30 * 1000;      // min gap between sends
@@ -158,8 +160,8 @@ export class ChatRoom extends App {
     this.seenKeys    = new Set();
     this.users       = [];
 
-    this._syncTimer      = null;
-    this._heartbeatTimer = null;
+    this._syncTimer       = null;
+    this._heartbeatTimer  = null;
     this._lastHeartbeatAt = 0;
 
     this._lastUpdate = 0;
@@ -174,12 +176,8 @@ export class ChatRoom extends App {
 
     this._joining = false;
 
-    // Per-request tree cache, refreshed explicitly before each
-    // top-level op. Never reused across ops.
     this._treeCache = null;
 
-    // Serial chain for all GitHub traffic from this client. Every
-    // top-level op awaits the previous one before starting.
     this._opChain = Promise.resolve();
 
     this.stack = ["token"];
@@ -222,9 +220,6 @@ export class ChatRoom extends App {
 
   // ---------- Serialized op runner ----------
 
-  // Chains fn onto the current op chain and returns a promise that
-  // resolves with fn's result. Ensures only one GitHub-touching
-  // operation runs on this client at a time.
   _serialize(fn) {
     const next = this._opChain.then(fn, fn);
     this._opChain = next.catch(() => {});
@@ -877,42 +872,14 @@ export class ChatRoom extends App {
     return json.sha;
   }
 
+  // Single POST. GitHub resolves intermediate directories from the
+  // supplied full path when base_tree is present.
   async _createTreeWithChange(baseTreeSha, path, blobSha) {
-    const parts = path.split("/");
-    const leafName = parts[parts.length - 1];
-
-    if (parts.length === 1) {
-      return await this._postTree([{
-        path: leafName,
-        mode: "100644",
-        type: "blob",
-        sha: blobSha,
-      }], baseTreeSha);
-    }
-
-    let subtreeSha = await this._postTree([{
-      path: leafName,
+    return await this._postTree([{
+      path: path,
       mode: "100644",
       type: "blob",
       sha: blobSha,
-    }], null);
-
-    for (let i = parts.length - 2; i >= 0; i--) {
-      const dirName = parts[i];
-      subtreeSha = await this._postTree([{
-        path: dirName,
-        mode: "040000",
-        type: "tree",
-        sha: subtreeSha,
-      }], null);
-    }
-
-    const rootDirName = parts[0];
-    return await this._postTree([{
-      path: rootDirName,
-      mode: "040000",
-      type: "tree",
-      sha: subtreeSha,
     }], baseTreeSha);
   }
 
@@ -946,15 +913,6 @@ export class ChatRoom extends App {
     if (!res.ok) throw new Error("PATCH_REF_FAILED_" + res.status);
   }
 
-  // Read-modify-write. buildContent(currentContentString) returns
-  // the string to write, or null to decline. Returns true if wrote,
-  // false if declined.
-  //
-  // On PATCH conflict, checks whether our commit already landed
-  // (the ref may point at our newCommitSha even though the PATCH
-  // response was a conflict). If it did, the write is a success and
-  // we do not retry. This prevents the "duplicate message" and
-  // "heartbeat thrash" failure modes.
   async _writeWithRetry(path, buildContent, message) {
     let lastError = null;
 
@@ -1020,15 +978,11 @@ export class ChatRoom extends App {
         continue;
       }
 
-      // If the ref already points at OUR new commit, someone (us)
-      // landed it. Treat as success.
       if (verifyRef === newCommitSha) {
         this._clearTreeCache();
         return true;
       }
 
-      // If the ref moved to something else, someone else won. Retry
-      // on top of their new commit.
       if (verifyRef !== currentCommitSha) {
         lastError = new Error("CONFLICT");
         await this._sleep(Math.random() * PUT_BACKOFF_MS);
@@ -1039,8 +993,6 @@ export class ChatRoom extends App {
         await this._patchRef(newCommitSha);
       } catch (e) {
         if (e.message === "BAD_TOKEN") throw e;
-        // PATCH conflicted. Before retrying, check whether our
-        // commit actually landed despite the reported conflict.
         try {
           const postRef = await this._readRef();
           if (postRef === newCommitSha) {
@@ -1049,7 +1001,6 @@ export class ChatRoom extends App {
           }
         } catch (e2) {
           if (e2.message === "BAD_TOKEN") throw e2;
-          // Fall through to retry.
         }
         lastError = e;
         await this._sleep(Math.random() * PUT_BACKOFF_MS);
@@ -1069,10 +1020,6 @@ export class ChatRoom extends App {
 
   // ---------- Presence helpers ----------
 
-  // Reads all ten slot files. Serialized with the rest of the
-  // GitHub traffic. Returns an array of 10, each slot's parse or
-  // null. Refreshes the tree cache once, then reads blobs against
-  // that snapshot.
   async _readPresence(room) {
     return await this._serialize(async () => {
       this._clearTreeCache();
@@ -1133,8 +1080,6 @@ export class ChatRoom extends App {
 
       let anyOccupied = presence.some(p => p && isOccupied(p.iso));
 
-      // Two-phase dead detection: if the first read shows no
-      // occupied slot, wait and re-read before concluding dead.
       if (!anyOccupied) {
         await this._sleep(DEAD_CONFIRM_MS);
         try {
@@ -1222,11 +1167,9 @@ export class ChatRoom extends App {
   async _claimSlot(room, presence) {
     for (let s = 0; s < SLOTS; s++) {
       const cur = presence[s];
-      // Skip slots currently occupied by someone else.
       if (cur && isOccupied(cur.iso) && cur.clientId !== this.clientId) {
         continue;
       }
-      // If we already hold this slot (from a prior session?), take it.
       if (cur && cur.clientId === this.clientId && isOccupied(cur.iso)) {
         return s;
       }
@@ -1318,13 +1261,6 @@ export class ChatRoom extends App {
 
   // ---------- Heartbeat ----------
 
-  // Write our slot with a fresh timestamp. If the slot is empty
-  // (not occupied by someone else), re-claim rather than leaving -
-  // our content was cleared, we were not evicted. Only leave when
-  // the slot holds another client's non-empty content.
-  //
-  // Skipped if a heartbeat landed recently, to avoid piling up
-  // writes when a previous one is still in flight.
   async _heartbeat() {
     if (this.room === null || this.slot === null) return;
 
@@ -1343,7 +1279,6 @@ export class ChatRoom extends App {
           path,
           (currentContent) => {
             if (!currentContent) {
-              // Slot empty. Re-claim.
               return self._serializeSlot(self.clientId, self.username, nowIso());
             }
             const parsed = self._parseSlot(currentContent);
@@ -1351,7 +1286,6 @@ export class ChatRoom extends App {
               return self._serializeSlot(self.clientId, self.username, nowIso());
             }
             if (parsed.clientId !== self.clientId) {
-              // Someone else owns it. Decline; we will leave below.
               return null;
             }
             return self._serializeSlot(self.clientId, self.username, nowIso());
@@ -1402,7 +1336,6 @@ export class ChatRoom extends App {
       this._clearTreeCache();
       await this._refreshTreeCache();
 
-      // Read log.
       let logContent = "";
       const logEntry = this._treeCache.entries.get("data/" + this.room + "/log.txt");
       if (logEntry) {
@@ -1427,7 +1360,6 @@ export class ChatRoom extends App {
         this.messages.push(parsed);
       }
 
-      // Read presence.
       const presence = [];
       for (let s = 0; s < SLOTS; s++) {
         const path = "data/" + this.room + "/presence/slot" + s + ".txt";
