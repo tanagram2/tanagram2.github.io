@@ -17,27 +17,32 @@
 // create a blob (file content), create a tree (directory listing
 // pointing at the new blob), create a commit (pointing at the new
 // tree and the current commit as parent), patch the ref (move
-// heads/main to the new commit, expecting the old commit sha). The
-// ref patch is the compare-and-swap. If someone else advanced main
-// between our ref read and our ref patch, the patch is rejected and
-// we retry.
-//
-// Concurrency: compare-and-swap on the ref. Same behavioral model
-// as before; different transport under it.
-//
-// Read-after-write: no longer a problem on the write path, because
-// the ref read is authoritative. Still not guaranteed on the
-// Contents-style cache, but we do not use that endpoint anymore.
-// We do still optimistically echo our own chat message locally so
-// there is never a visible "I sent it and it did not appear" gap.
+// heads/main to the new commit, expecting the old commit sha).
+// The ref patch is the compare-and-swap. If someone else advanced
+// main between our ref read and our ref patch, the patch is rejected
+// and we retry.
 //
 // Presence model: one file per slot, data/roomN/presence/slotM.txt.
 // Each slot is written by exactly one client at a time. A slot is
 // "occupied" if its heartbeat is within STALE_MS. A room is "dead"
 // if every slot is empty or stale.
 //
-// Room reset: the first client to join a dead room wipes the log
-// and all ten presence files, then claims slot 0.
+// Heartbeat is 30s, staleness is 120s. A slot is stale only if
+// multiple consecutive heartbeats are missed, which means the
+// client is genuinely gone. This is what prevents a slow join on a
+// second machine from looking like a dead room.
+//
+// Dead-room detection is two-phase: read presence, and if no slot
+// is fresh, wait 1s and read again. Only if the second read also
+// shows no fresh slot do we reset. This closes the race where a
+// joiner's first read is one tick behind another client's
+// heartbeat.
+//
+// Reset wipes the log and all presence files, then claims slot 0.
+//
+// Heartbeat self-heal: if the heartbeat finds its own slot empty
+// (not occupied by someone else), it re-claims rather than leaving.
+// Eviction only fires when the slot holds ANOTHER client's content.
 //
 // Screens (all one canvas, toggled via visible):
 //   1. Token      - enters PAT, stored in localStorage.
@@ -54,7 +59,7 @@ import { Label }     from "../composites/Label.js";
 import { Viewport }  from "../systems/Viewport.js";
 
 // -----------------------------------------------------------------
-// FILL THESE IN
+// Repo config
 // -----------------------------------------------------------------
 
 const OWNER  = "tanagram2";
@@ -69,13 +74,14 @@ const ROOMS = ["room1", "room2", "room3"];
 const ROOM_LABELS = { room1: "Room1", room2: "Room2", room3: "Room3" };
 const SLOTS = 10;
 
-const STALE_MS         = 2 * 60 * 1000;  // 2 minutes: room is dead if older
-const HEARTBEAT_MS     = 60 * 1000;      // every 60s, always
+const STALE_MS         = 2 * 60 * 1000;  // 2 minutes: slot counts as stale
+const HEARTBEAT_MS     = 30 * 1000;      // every 30s, well under STALE_MS
 const SYNC_MS          = 60 * 1000;      // periodic sync
 const UPDATE_THROTTLE  = 10 * 1000;      // manual Update cooldown
 const SEND_COOLDOWN    = 30 * 1000;      // min gap between sends
 const PUT_MAX_RETRIES  = 6;              // retries for a conflicted write
 const PUT_BACKOFF_MS   = 250;            // random 0..250 ms between retries
+const DEAD_CONFIRM_MS  = 1000;           // wait between the two dead-room reads
 
 const CURSOR_MS        = 500;            // blink half-period
 
@@ -161,10 +167,7 @@ export class ChatRoom extends App {
 
     this._joining = false;
 
-    // Per-sync caches. Cleared at the start of each _sync, _joinRoom
-    // and other top-level operations. Keyed by nothing (single
-    // snapshot of ref + tree).
-    this._treeCache = null; // { commitSha, treeSha, entries: Map }
+    this._treeCache = null;
 
     this.stack = ["token"];
 
@@ -755,7 +758,6 @@ export class ChatRoom extends App {
     return Object.assign({ "Content-Type": "application/json" }, this._authHeaders());
   }
 
-  // GET the current commit sha of heads/BRANCH.
   async _readRef() {
     const url = API + "git/ref/heads/" + encodeURIComponent(BRANCH);
     const res = await fetch(url, { headers: this._authHeaders(), cache: "no-store" });
@@ -765,7 +767,6 @@ export class ChatRoom extends App {
     return json.object.sha;
   }
 
-  // GET a commit, return its tree sha.
   async _readCommitTreeSha(commitSha) {
     const url = API + "git/commits/" + commitSha;
     const res = await fetch(url, { headers: this._authHeaders(), cache: "no-store" });
@@ -775,7 +776,6 @@ export class ChatRoom extends App {
     return json.tree.sha;
   }
 
-  // GET a tree recursively, return Map of path -> { sha, mode, type }.
   async _readTreeEntries(treeSha) {
     const url = API + "git/trees/" + treeSha + "?recursive=1";
     const res = await fetch(url, { headers: this._authHeaders(), cache: "no-store" });
@@ -792,7 +792,6 @@ export class ChatRoom extends App {
     return map;
   }
 
-  // GET a blob, return decoded text (empty string if blob is empty).
   async _readBlob(blobSha) {
     const url = API + "git/blobs/" + blobSha;
     const res = await fetch(url, { headers: this._authHeaders(), cache: "no-store" });
@@ -803,10 +802,6 @@ export class ChatRoom extends App {
     return fromBase64(json.content);
   }
 
-  // Fresh snapshot of the current tree. Populates this._treeCache.
-  // Subsequent _readFile calls in the same top-level operation reuse
-  // it. Call this at the start of any top-level op so we do not read
-  // a stale tree from a previous op.
   async _refreshTreeCache() {
     const commitSha = await this._readRef();
     const treeSha   = await this._readCommitTreeSha(commitSha);
@@ -819,9 +814,6 @@ export class ChatRoom extends App {
     this._treeCache = null;
   }
 
-  // Read a file via Git Data. Returns { content, sha, commitSha } or
-  // null if the path does not exist in the current tree. sha is the
-  // blob sha.
   async _readFile(path) {
     if (!this._treeCache) {
       await this._refreshTreeCache();
@@ -832,7 +824,6 @@ export class ChatRoom extends App {
     return { content, sha: entry.sha, commitSha: this._treeCache.commitSha };
   }
 
-  // Create a blob, return its sha.
   async _createBlob(content) {
     const url = API + "git/blobs";
     const res = await fetch(url, {
@@ -844,73 +835,6 @@ export class ChatRoom extends App {
     if (!res.ok) throw new Error("CREATE_BLOB_FAILED_" + res.status);
     const json = await res.json();
     return json.sha;
-  }
-
-  // Create a tree from the current tree, replacing/adding one path.
-  // `baseTreeSha` is the tree of the commit we are building on top
-  // of. `path` is the file path. `blobSha` is the sha of the new
-  // blob for that path. Returns the new tree sha.
-  async _createTreeWithChange(baseTreeSha, path, blobSha) {
-    // The tree endpoint expects paths split by directory. For our
-    // simple two-level layout (data/roomN/presence/slotM.txt), we
-    // build a nested structure. A general recursive writer is out
-    // of scope; we only ever write single files under one repo.
-
-    // Simplest correct form: use the "base_tree + path segments"
-    // trick. GitHub accepts a flat list of { path, mode, type, sha }
-    // when base_tree is supplied, but only at the top level for that
-    // tree. To update a nested file we build a chain of single-entry
-    // trees bottom-up.
-
-    // Split "data/room1/presence/slot0.txt" into
-    // ["data", "room1", "presence", "slot0.txt"].
-
-    const parts = path.split("/");
-    const leafName = parts[parts.length - 1];
-
-    // If the file lives directly at the root, we can do a single tree.
-    if (parts.length === 1) {
-      return await this._postTree([{
-        path: leafName,
-        mode: "100644",
-        type: "blob",
-        sha: blobSha,
-      }], baseTreeSha);
-    }
-
-    // Otherwise, walk up: create the leaf subtree entry, then wrap
-    // it in parent subtrees. This is a chain of POSTs. For our
-    // 4-segment paths, that is 3 POSTs.
-
-    // Start with the leaf subtree: { leafName -> blobSha }.
-    let subtreeSha = await this._postTree([{
-      path: leafName,
-      mode: "100644",
-      type: "blob",
-      sha: blobSha,
-    }], null);
-
-    // Then wrap upward. Each parent tree contains just the one dir
-    // entry pointing at the subtree we just created.
-    for (let i = parts.length - 2; i >= 0; i--) {
-      const dirName = parts[i];
-      subtreeSha = await this._postTree([{
-        path: dirName,
-        mode: "040000",
-        type: "tree",
-        sha: subtreeSha,
-      }], null);
-    }
-
-    // Finally, take the top-most subtree (the one whose root is the
-    // first path segment) and graft it into the base tree's root.
-    const rootDirName = parts[0];
-    return await this._postTree([{
-      path: rootDirName,
-      mode: "040000",
-      type: "tree",
-      sha: subtreeSha,
-    }], baseTreeSha);
   }
 
   async _postTree(entries, baseTreeSha) {
@@ -927,6 +851,45 @@ export class ChatRoom extends App {
     if (!res.ok) throw new Error("CREATE_TREE_FAILED_" + res.status);
     const json = await res.json();
     return json.sha;
+  }
+
+  async _createTreeWithChange(baseTreeSha, path, blobSha) {
+    const parts = path.split("/");
+    const leafName = parts[parts.length - 1];
+
+    if (parts.length === 1) {
+      return await this._postTree([{
+        path: leafName,
+        mode: "100644",
+        type: "blob",
+        sha: blobSha,
+      }], baseTreeSha);
+    }
+
+    let subtreeSha = await this._postTree([{
+      path: leafName,
+      mode: "100644",
+      type: "blob",
+      sha: blobSha,
+    }], null);
+
+    for (let i = parts.length - 2; i >= 0; i--) {
+      const dirName = parts[i];
+      subtreeSha = await this._postTree([{
+        path: dirName,
+        mode: "040000",
+        type: "tree",
+        sha: subtreeSha,
+      }], null);
+    }
+
+    const rootDirName = parts[0];
+    return await this._postTree([{
+      path: rootDirName,
+      mode: "040000",
+      type: "tree",
+      sha: subtreeSha,
+    }], baseTreeSha);
   }
 
   async _createCommit(treeSha, parentCommitSha, message) {
@@ -947,10 +910,7 @@ export class ChatRoom extends App {
     return json.sha;
   }
 
-  // Patch the ref. Uses the expected current commit sha as CAS.
-  // Throws CONFLICT on 409 or 422 (GitHub returns both for ref
-  // conflicts depending on the case).
-  async _patchRef(newCommitSha, expectedCurrentCommitSha) {
+  async _patchRef(newCommitSha) {
     const url = API + "git/refs/heads/" + encodeURIComponent(BRANCH);
     const res = await fetch(url, {
       method: "PATCH",
@@ -960,27 +920,8 @@ export class ChatRoom extends App {
     if (res.status === 401) throw new Error("BAD_TOKEN");
     if (res.status === 409 || res.status === 422) throw new Error("CONFLICT");
     if (!res.ok) throw new Error("PATCH_REF_FAILED_" + res.status);
-    // The current sha check: GitHub's PATCH ref does NOT accept an
-    // "expected current" parameter, so it does not actually enforce
-    // CAS on its own. We enforce it ourselves by checking that the
-    // ref we read a moment ago still matches what we are building on.
-    // See _writeWithRetry for the check.
-    void expectedCurrentCommitSha;
   }
 
-  // Read-modify-write. buildContent(currentContentString) returns
-  // the string to write, or null to decline. Returns true if wrote,
-  // false if declined.
-  //
-  // Full sequence per attempt:
-  //   1. Read the ref -> currentCommitSha.
-  //   2. Read the tree of that commit, find blob sha for our path.
-  //   3. Read the blob (or "" if it does not exist).
-  //   4. buildContent(currentContent) -> toWrite.
-  //   5. Create blob, create tree(s), create commit (parent =
-  //      currentCommitSha).
-  //   6. Re-read the ref; if it still equals currentCommitSha, PATCH.
-  //      If it has moved, throw CONFLICT and retry.
   async _writeWithRetry(path, buildContent, message) {
     let lastError = null;
 
@@ -1036,9 +977,6 @@ export class ChatRoom extends App {
         continue;
       }
 
-      // Before patching, verify the ref has not moved since we read
-      // it. This is the CAS. GitHub's PATCH ref does not do it for
-      // us, so we do it with a fresh read.
       let verifyRef;
       try {
         verifyRef = await this._readRef();
@@ -1050,29 +988,20 @@ export class ChatRoom extends App {
       }
 
       if (verifyRef !== currentCommitSha) {
-        // Someone else advanced the branch between our read and our
-        // commit. Discard our new commit (it is an orphan) and retry.
         lastError = new Error("CONFLICT");
         await this._sleep(Math.random() * PUT_BACKOFF_MS);
         continue;
       }
 
       try {
-        await this._patchRef(newCommitSha, currentCommitSha);
+        await this._patchRef(newCommitSha);
       } catch (e) {
         if (e.message === "BAD_TOKEN") throw e;
-        if (e.message === "CONFLICT") {
-          lastError = e;
-          await this._sleep(Math.random() * PUT_BACKOFF_MS);
-          continue;
-        }
         lastError = e;
         await this._sleep(Math.random() * PUT_BACKOFF_MS);
         continue;
       }
 
-      // Success. Invalidate our tree cache so the next read sees
-      // the new state.
       this._clearTreeCache();
       return true;
     }
@@ -1087,6 +1016,7 @@ export class ChatRoom extends App {
   // ---------- Presence helpers ----------
 
   async _readPresence(room) {
+    this._clearTreeCache();
     const out = [];
     for (let s = 0; s < SLOTS; s++) {
       const path = "data/" + room + "/presence/slot" + s + ".txt";
@@ -1128,8 +1058,6 @@ export class ChatRoom extends App {
     this._setStatus("Joining " + ROOM_LABELS[room] + "...");
 
     try {
-      this._clearTreeCache();
-
       let presence;
       try {
         presence = await this._readPresence(room);
@@ -1138,7 +1066,22 @@ export class ChatRoom extends App {
         return;
       }
 
-      const anyFresh = presence.some(p => p && isFresh(p.iso));
+      let anyFresh = presence.some(p => p && isFresh(p.iso));
+
+      // Two-phase dead detection: if the first read shows no fresh
+      // slot, wait and re-read before concluding the room is dead.
+      // This closes the race where our first read is one tick behind
+      // someone else's heartbeat.
+      if (!anyFresh) {
+        await this._sleep(DEAD_CONFIRM_MS);
+        try {
+          presence = await this._readPresence(room);
+        } catch (e) {
+          this._handleApiError(e, "read presence (confirm)");
+          return;
+        }
+        anyFresh = presence.some(p => p && isFresh(p.iso));
+      }
 
       if (!anyFresh) {
         this._setStatus("Resetting dead room...");
@@ -1310,34 +1253,50 @@ export class ChatRoom extends App {
 
   // ---------- Heartbeat ----------
 
+  // Write our slot with a fresh timestamp. If the slot is empty (not
+  // occupied by someone else), re-claim it rather than leaving -
+  // that means our content got cleared, not that we were evicted.
+  // Only leave when the slot holds another client's fresh content.
   async _heartbeat() {
     if (this.room === null || this.slot === null) return;
     const path = "data/" + this.room + "/presence/slot" + this.slot + ".txt";
     const self = this;
 
+    let wrote = false;
     try {
       this._clearTreeCache();
-      const wrote = await this._writeWithRetry(
+      wrote = await this._writeWithRetry(
         path,
         (currentContent) => {
-          if (!currentContent) return null;
+          if (!currentContent) {
+            // Slot is empty. Re-claim it.
+            return self._serializeSlot(self.clientId, self.username, nowIso());
+          }
           const parsed = self._parseSlot(currentContent);
-          if (!parsed || parsed.clientId !== self.clientId) return null;
+          if (!parsed) {
+            return self._serializeSlot(self.clientId, self.username, nowIso());
+          }
+          if (parsed.clientId !== self.clientId) {
+            // Someone else holds the slot. Decline; we will leave
+            // below.
+            return null;
+          }
           return self._serializeSlot(self.clientId, self.username, nowIso());
         },
         "heartbeat slot " + this.slot
       );
-
-      if (!wrote) {
-        this._setStatus("Your slot was taken. Leaving...");
-        await this._leaveRoom();
-      }
     } catch (e) {
       if (e.message === "BAD_TOKEN") {
         this._handleApiError(e, "heartbeat");
         return;
       }
       // Other errors: try again next beat.
+      return;
+    }
+
+    if (!wrote) {
+      this._setStatus("Your slot was taken. Leaving...");
+      await this._leaveRoom();
     }
   }
 
