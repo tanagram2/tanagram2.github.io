@@ -50,8 +50,8 @@ import { Viewport }  from "../systems/Viewport.js";
 // FILL THESE IN
 // -----------------------------------------------------------------
 
-const OWNER  = "YOUR_GITHUB_USERNAME";
-const REPO   = "YOUR_REPO_NAME";
+const OWNER  = "tanagram2";
+const REPO   = "tanagram2.github.io";
 const BRANCH = "main";
 
 // -----------------------------------------------------------------
