@@ -9,34 +9,32 @@
 // The Contents API (GET/PUT /repos/.../contents/PATH) is served from
 // a cache that is not invalidated promptly after a write. A read
 // right after a write can return the pre-write version for long
-// enough to break a compare-and-swap. We tried to work around it
-// with retries and it kept biting us with "sha does not match" 409s.
+// enough to break a compare-and-swap. The Git Data API reads the
+// ref and git object database directly.
 //
-// The Git Data API reads from the ref and git object database
-// directly and is not subject to that lag. A write is a sequence:
-// create a blob (file content), create a tree (directory listing
-// pointing at the new blob), create a commit (pointing at the new
-// tree and the current commit as parent), patch the ref (move
-// heads/main to the new commit, expecting the old commit sha).
-// The ref patch is the compare-and-swap. If someone else advanced
-// main between our ref read and our ref patch, the patch is rejected
-// and we retry.
+// The ref PATCH is the compare-and-swap. If our PATCH fails, we
+// check whether our commit actually landed (the ref may already
+// point at it). If it did, the write succeeded and we do NOT retry.
+// If it did not, someone else advanced the branch and we rebuild.
+//
+// All git traffic on this client goes through one serialized chain
+// (_serialize). This prevents the heartbeat and the sync from
+// racing each other, which is what produced most conflicts when
+// only one human is present.
 //
 // Presence model: one file per slot, data/roomN/presence/slotM.txt.
-// Each slot is written by exactly one client at a time. A slot is
-// "occupied" if its heartbeat is within STALE_MS. A room is "dead"
-// if every slot is empty or stale.
+// A slot is "occupied" if its content is non-empty and its
+// timestamp is within OCCUPIED_MS (2 * STALE_MS, so a single late
+// heartbeat does not make a live client look gone). "Fresh" is the
+// stricter STALE_MS used for display. A room is "dead" if no slot
+// is occupied.
 //
-// Heartbeat is 30s, staleness is 120s. A slot is stale only if
-// multiple consecutive heartbeats are missed, which means the
-// client is genuinely gone. This is what prevents a slow join on a
-// second machine from looking like a dead room.
+// Heartbeat is 30s, well under OCCUPIED_MS of 240s. Slots stay
+// occupied as long as at least one heartbeat lands every 4 minutes.
 //
 // Dead-room detection is two-phase: read presence, and if no slot
-// is fresh, wait 1s and read again. Only if the second read also
-// shows no fresh slot do we reset. This closes the race where a
-// joiner's first read is one tick behind another client's
-// heartbeat.
+// is occupied, wait 1s and read again. Only if the second read also
+// shows no occupied slot do we reset.
 //
 // Reset wipes the log and all presence files, then claims slot 0.
 //
@@ -74,8 +72,9 @@ const ROOMS = ["room1", "room2", "room3"];
 const ROOM_LABELS = { room1: "Room1", room2: "Room2", room3: "Room3" };
 const SLOTS = 10;
 
-const STALE_MS         = 2 * 60 * 1000;  // 2 minutes: slot counts as stale
-const HEARTBEAT_MS     = 30 * 1000;      // every 30s, well under STALE_MS
+const STALE_MS         = 2 * 60 * 1000;  // 2 min: heartbeat freshness for display
+const OCCUPIED_MS      = 4 * 60 * 1000;  // 4 min: join-time "is someone here"
+const HEARTBEAT_MS     = 30 * 1000;      // every 30s, well under both thresholds
 const SYNC_MS          = 60 * 1000;      // periodic sync
 const UPDATE_THROTTLE  = 10 * 1000;      // manual Update cooldown
 const SEND_COOLDOWN    = 30 * 1000;      // min gap between sends
@@ -128,6 +127,13 @@ function isFresh(isoStr) {
   return (Date.now() - t) < STALE_MS;
 }
 
+function isOccupied(isoStr) {
+  if (!isoStr) return false;
+  const t = Date.parse(isoStr);
+  if (Number.isNaN(t)) return false;
+  return (Date.now() - t) < OCCUPIED_MS;
+}
+
 function hhmm(isoStr) {
   const d = new Date(isoStr);
   if (Number.isNaN(d.getTime())) return "--:--";
@@ -154,6 +160,7 @@ export class ChatRoom extends App {
 
     this._syncTimer      = null;
     this._heartbeatTimer = null;
+    this._lastHeartbeatAt = 0;
 
     this._lastUpdate = 0;
     this._lastSend   = 0;
@@ -167,7 +174,13 @@ export class ChatRoom extends App {
 
     this._joining = false;
 
+    // Per-request tree cache, refreshed explicitly before each
+    // top-level op. Never reused across ops.
     this._treeCache = null;
+
+    // Serial chain for all GitHub traffic from this client. Every
+    // top-level op awaits the previous one before starting.
+    this._opChain = Promise.resolve();
 
     this.stack = ["token"];
 
@@ -205,6 +218,17 @@ export class ChatRoom extends App {
     } catch (e) {
       // localStorage may be unavailable.
     }
+  }
+
+  // ---------- Serialized op runner ----------
+
+  // Chains fn onto the current op chain and returns a promise that
+  // resolves with fn's result. Ensures only one GitHub-touching
+  // operation runs on this client at a time.
+  _serialize(fn) {
+    const next = this._opChain.then(fn, fn);
+    this._opChain = next.catch(() => {});
+    return next;
   }
 
   // ---------- Field rendering ----------
@@ -922,6 +946,15 @@ export class ChatRoom extends App {
     if (!res.ok) throw new Error("PATCH_REF_FAILED_" + res.status);
   }
 
+  // Read-modify-write. buildContent(currentContentString) returns
+  // the string to write, or null to decline. Returns true if wrote,
+  // false if declined.
+  //
+  // On PATCH conflict, checks whether our commit already landed
+  // (the ref may point at our newCommitSha even though the PATCH
+  // response was a conflict). If it did, the write is a success and
+  // we do not retry. This prevents the "duplicate message" and
+  // "heartbeat thrash" failure modes.
   async _writeWithRetry(path, buildContent, message) {
     let lastError = null;
 
@@ -987,6 +1020,15 @@ export class ChatRoom extends App {
         continue;
       }
 
+      // If the ref already points at OUR new commit, someone (us)
+      // landed it. Treat as success.
+      if (verifyRef === newCommitSha) {
+        this._clearTreeCache();
+        return true;
+      }
+
+      // If the ref moved to something else, someone else won. Retry
+      // on top of their new commit.
       if (verifyRef !== currentCommitSha) {
         lastError = new Error("CONFLICT");
         await this._sleep(Math.random() * PUT_BACKOFF_MS);
@@ -997,6 +1039,18 @@ export class ChatRoom extends App {
         await this._patchRef(newCommitSha);
       } catch (e) {
         if (e.message === "BAD_TOKEN") throw e;
+        // PATCH conflicted. Before retrying, check whether our
+        // commit actually landed despite the reported conflict.
+        try {
+          const postRef = await this._readRef();
+          if (postRef === newCommitSha) {
+            this._clearTreeCache();
+            return true;
+          }
+        } catch (e2) {
+          if (e2.message === "BAD_TOKEN") throw e2;
+          // Fall through to retry.
+        }
         lastError = e;
         await this._sleep(Math.random() * PUT_BACKOFF_MS);
         continue;
@@ -1015,24 +1069,35 @@ export class ChatRoom extends App {
 
   // ---------- Presence helpers ----------
 
+  // Reads all ten slot files. Serialized with the rest of the
+  // GitHub traffic. Returns an array of 10, each slot's parse or
+  // null. Refreshes the tree cache once, then reads blobs against
+  // that snapshot.
   async _readPresence(room) {
-    this._clearTreeCache();
-    const out = [];
-    for (let s = 0; s < SLOTS; s++) {
-      const path = "data/" + room + "/presence/slot" + s + ".txt";
-      let rec = null;
-      try {
-        const r = await this._readFile(path);
-        if (r && r.content) {
-          const parsed = this._parseSlot(r.content);
-          if (parsed) rec = parsed;
+    return await this._serialize(async () => {
+      this._clearTreeCache();
+      await this._refreshTreeCache();
+
+      const out = [];
+      for (let s = 0; s < SLOTS; s++) {
+        const path = "data/" + room + "/presence/slot" + s + ".txt";
+        let rec = null;
+        try {
+          const entry = this._treeCache.entries.get(path);
+          if (entry) {
+            const content = await this._readBlob(entry.sha);
+            if (content) {
+              const parsed = this._parseSlot(content);
+              if (parsed) rec = parsed;
+            }
+          }
+        } catch (e) {
+          if (e.message === "BAD_TOKEN") throw e;
         }
-      } catch (e) {
-        if (e.message === "BAD_TOKEN") throw e;
+        out.push(rec);
       }
-      out.push(rec);
-    }
-    return out;
+      return out;
+    });
   }
 
   _parseSlot(content) {
@@ -1066,13 +1131,11 @@ export class ChatRoom extends App {
         return;
       }
 
-      let anyFresh = presence.some(p => p && isFresh(p.iso));
+      let anyOccupied = presence.some(p => p && isOccupied(p.iso));
 
-      // Two-phase dead detection: if the first read shows no fresh
-      // slot, wait and re-read before concluding the room is dead.
-      // This closes the race where our first read is one tick behind
-      // someone else's heartbeat.
-      if (!anyFresh) {
+      // Two-phase dead detection: if the first read shows no
+      // occupied slot, wait and re-read before concluding dead.
+      if (!anyOccupied) {
         await this._sleep(DEAD_CONFIRM_MS);
         try {
           presence = await this._readPresence(room);
@@ -1080,10 +1143,10 @@ export class ChatRoom extends App {
           this._handleApiError(e, "read presence (confirm)");
           return;
         }
-        anyFresh = presence.some(p => p && isFresh(p.iso));
+        anyOccupied = presence.some(p => p && isOccupied(p.iso));
       }
 
-      if (!anyFresh) {
+      if (!anyOccupied) {
         this._setStatus("Resetting dead room...");
 
         try {
@@ -1136,6 +1199,7 @@ export class ChatRoom extends App {
       this.messages = [];
       this.seenKeys = new Set();
       this.users = [];
+      this._lastHeartbeatAt = 0;
 
       this.roomTitleLabel.text = ROOM_LABELS[room];
       this.inputText = "";
@@ -1158,10 +1222,12 @@ export class ChatRoom extends App {
   async _claimSlot(room, presence) {
     for (let s = 0; s < SLOTS; s++) {
       const cur = presence[s];
-      if (cur && isFresh(cur.iso) && cur.clientId !== this.clientId) {
+      // Skip slots currently occupied by someone else.
+      if (cur && isOccupied(cur.iso) && cur.clientId !== this.clientId) {
         continue;
       }
-      if (cur && cur.clientId === this.clientId && isFresh(cur.iso)) {
+      // If we already hold this slot (from a prior session?), take it.
+      if (cur && cur.clientId === this.clientId && isOccupied(cur.iso)) {
         return s;
       }
 
@@ -1174,7 +1240,7 @@ export class ChatRoom extends App {
           (currentContent) => {
             if (currentContent) {
               const parsed = this._parseSlot(currentContent);
-              if (parsed && parsed.clientId !== this.clientId && isFresh(parsed.iso)) {
+              if (parsed && parsed.clientId !== this.clientId && isOccupied(parsed.iso)) {
                 return null;
               }
             }
@@ -1213,7 +1279,6 @@ export class ChatRoom extends App {
 
       const path = "data/" + room + "/presence/slot" + slot + ".txt";
       try {
-        this._clearTreeCache();
         await this._writeWithRetry(
           path,
           (currentContent) => {
@@ -1253,48 +1318,58 @@ export class ChatRoom extends App {
 
   // ---------- Heartbeat ----------
 
-  // Write our slot with a fresh timestamp. If the slot is empty (not
-  // occupied by someone else), re-claim it rather than leaving -
-  // that means our content got cleared, not that we were evicted.
-  // Only leave when the slot holds another client's fresh content.
+  // Write our slot with a fresh timestamp. If the slot is empty
+  // (not occupied by someone else), re-claim rather than leaving -
+  // our content was cleared, we were not evicted. Only leave when
+  // the slot holds another client's non-empty content.
+  //
+  // Skipped if a heartbeat landed recently, to avoid piling up
+  // writes when a previous one is still in flight.
   async _heartbeat() {
     if (this.room === null || this.slot === null) return;
+
+    const now = Date.now();
+    if (this._lastHeartbeatAt && (now - this._lastHeartbeatAt) < HEARTBEAT_MS * 0.75) {
+      return;
+    }
+
     const path = "data/" + this.room + "/presence/slot" + this.slot + ".txt";
     const self = this;
 
     let wrote = false;
     try {
-      this._clearTreeCache();
-      wrote = await this._writeWithRetry(
-        path,
-        (currentContent) => {
-          if (!currentContent) {
-            // Slot is empty. Re-claim it.
+      wrote = await this._serialize(() =>
+        this._writeWithRetry(
+          path,
+          (currentContent) => {
+            if (!currentContent) {
+              // Slot empty. Re-claim.
+              return self._serializeSlot(self.clientId, self.username, nowIso());
+            }
+            const parsed = self._parseSlot(currentContent);
+            if (!parsed) {
+              return self._serializeSlot(self.clientId, self.username, nowIso());
+            }
+            if (parsed.clientId !== self.clientId) {
+              // Someone else owns it. Decline; we will leave below.
+              return null;
+            }
             return self._serializeSlot(self.clientId, self.username, nowIso());
-          }
-          const parsed = self._parseSlot(currentContent);
-          if (!parsed) {
-            return self._serializeSlot(self.clientId, self.username, nowIso());
-          }
-          if (parsed.clientId !== self.clientId) {
-            // Someone else holds the slot. Decline; we will leave
-            // below.
-            return null;
-          }
-          return self._serializeSlot(self.clientId, self.username, nowIso());
-        },
-        "heartbeat slot " + this.slot
+          },
+          "heartbeat slot " + this.slot
+        )
       );
     } catch (e) {
       if (e.message === "BAD_TOKEN") {
         this._handleApiError(e, "heartbeat");
         return;
       }
-      // Other errors: try again next beat.
       return;
     }
 
-    if (!wrote) {
+    if (wrote) {
+      this._lastHeartbeatAt = now;
+    } else {
       this._setStatus("Your slot was taken. Leaving...");
       await this._leaveRoom();
     }
@@ -1323,53 +1398,72 @@ export class ChatRoom extends App {
   async _sync() {
     if (this.room === null) return;
 
-    this._clearTreeCache();
+    return await this._serialize(async () => {
+      this._clearTreeCache();
+      await this._refreshTreeCache();
 
-    let logRead;
-    try {
-      logRead = await this._readFile("data/" + this.room + "/log.txt");
-    } catch (e) {
-      if (e.message === "BAD_TOKEN") { this._handleApiError(e, "sync log"); return; }
-      throw e;
-    }
-
-    const lines = logRead && logRead.content
-      ? logRead.content.split("\n").filter(l => l.length > 0)
-      : [];
-
-    for (const line of lines) {
-      const parsed = this._parseMessageLine(line);
-      if (!parsed) continue;
-      const key = parsed.username + "|" + parsed.iso + "|" + parsed.text;
-      if (this.seenKeys.has(key)) continue;
-      this.seenKeys.add(key);
-      this.messages.push(parsed);
-    }
-
-    let presence;
-    try {
-      presence = await this._readPresence(this.room);
-    } catch (e) {
-      if (e.message === "BAD_TOKEN") { this._handleApiError(e, "sync presence"); return; }
-      throw e;
-    }
-
-    this.users = [];
-    let selfListed = false;
-    for (let s = 0; s < SLOTS; s++) {
-      const p = presence[s];
-      if (p && isFresh(p.iso)) {
-        this.users.push({ slot: s, username: p.username, clientId: p.clientId });
-        if (p.clientId === this.clientId) selfListed = true;
+      // Read log.
+      let logContent = "";
+      const logEntry = this._treeCache.entries.get("data/" + this.room + "/log.txt");
+      if (logEntry) {
+        try {
+          logContent = await this._readBlob(logEntry.sha);
+        } catch (e) {
+          if (e.message === "BAD_TOKEN") { this._handleApiError(e, "sync log"); return; }
+          throw e;
+        }
       }
-    }
-    if (!selfListed && this.slot !== null) {
-      this.users.push({ slot: this.slot, username: this.username, clientId: this.clientId });
-      this.users.sort((a, b) => a.slot - b.slot);
-    }
 
-    this._renderMessages();
-    this._renderUsers();
+      const lines = logContent
+        ? logContent.split("\n").filter(l => l.length > 0)
+        : [];
+
+      for (const line of lines) {
+        const parsed = this._parseMessageLine(line);
+        if (!parsed) continue;
+        const key = parsed.username + "|" + parsed.iso + "|" + parsed.text;
+        if (this.seenKeys.has(key)) continue;
+        this.seenKeys.add(key);
+        this.messages.push(parsed);
+      }
+
+      // Read presence.
+      const presence = [];
+      for (let s = 0; s < SLOTS; s++) {
+        const path = "data/" + this.room + "/presence/slot" + s + ".txt";
+        const entry = this._treeCache.entries.get(path);
+        let rec = null;
+        if (entry) {
+          try {
+            const content = await this._readBlob(entry.sha);
+            if (content) {
+              const parsed = this._parseSlot(content);
+              if (parsed) rec = parsed;
+            }
+          } catch (e) {
+            if (e.message === "BAD_TOKEN") { this._handleApiError(e, "sync presence"); return; }
+          }
+        }
+        presence.push(rec);
+      }
+
+      this.users = [];
+      let selfListed = false;
+      for (let s = 0; s < SLOTS; s++) {
+        const p = presence[s];
+        if (p && isFresh(p.iso)) {
+          this.users.push({ slot: s, username: p.username, clientId: p.clientId });
+          if (p.clientId === this.clientId) selfListed = true;
+        }
+      }
+      if (!selfListed && this.slot !== null) {
+        this.users.push({ slot: this.slot, username: this.username, clientId: this.clientId });
+        this.users.sort((a, b) => a.slot - b.slot);
+      }
+
+      this._renderMessages();
+      this._renderUsers();
+    });
   }
 
   _parseMessageLine(line) {
@@ -1439,11 +1533,12 @@ export class ChatRoom extends App {
     const path = "data/" + this.room + "/log.txt";
 
     try {
-      this._clearTreeCache();
-      await this._writeWithRetry(
-        path,
-        (currentContent) => currentContent + line,
-        "chat from " + this.username
+      await this._serialize(() =>
+        this._writeWithRetry(
+          path,
+          (currentContent) => currentContent + line,
+          "chat from " + this.username
+        )
       );
 
       const key = this.username + "|" + iso + "|" + safe;
