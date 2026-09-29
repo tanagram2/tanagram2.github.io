@@ -57,9 +57,10 @@
 // Desktop layout: wide box, chat log on the left and user list as a
 // right-hand column. Mobile layout: user list becomes a slim
 // horizontal strip at the top of the chat box, log below, input row
-// at the bottom. Mobile text entry uses the shared Keyboard
-// composite (uppercase + digits only, for now) toggled by a button
-// on the chat screen; the username screen shows it always.
+// at the bottom. The chat box on mobile is deliberately shorter than
+// the screen so the on-canvas keyboard has a reserved strip below
+// it. The box height is fixed and does not change when the keyboard
+// toggles.
 
 import { App }       from "./App.js";
 import { Rect }      from "../primitives/Rect.js";
@@ -321,8 +322,7 @@ export class ChatRoom extends App {
     screen.add(this.usernameErrorLabel);
 
     if (this.mobile) {
-      // Keyboard always visible on mobile. Continue button sits
-      // below it.
+      // Keyboard always visible on mobile. Enter button sits below.
       const kbMargin = 40;
       const kbW      = W - kbMargin * 2;
       const kbX      = kbMargin;
@@ -622,27 +622,41 @@ export class ChatRoom extends App {
     const W = Viewport.width;
     const H = Viewport.height;
 
-    // Layout regions, top to bottom:
-    //   - top bar (Leave/Update/title): y 0..84
-    //   - status label: y ~100
-    //   - box (users strip, log, input row): starts at 130
-    //   - keyboard (when visible) sits below the input row.
+    // The chat box top stays fixed. The chat box bottom is raised
+    // so that a full on-canvas keyboard fits below it, fully
+    // on-screen. The box height does NOT change when the keyboard is
+    // toggled: the strip below the box is always reserved.
+    //
+    // Order of computation:
+    //   1. Build the keyboard first so we know its height.
+    //   2. Reserve space below the box equal to keyboard height plus
+    //      a top gap (between box and keyboard) and a bottom margin.
+    //   3. Size the box to what remains.
     const boxX = 20;
     const boxY = 130;
     const boxW = W - 40;
-    const boxH = H - boxY - 20;
+
+    const kbMargin = 40;
+    const kbW      = W - kbMargin * 2;
+    const kbX      = kbMargin;
+
+    // Build the keyboard unpositioned so we can read its .h. Its y
+    // is set below, once we know the box height.
+    this.chatKeyboard = new Keyboard({
+      x: kbX, y: 0,
+      w: kbW,
+      onKey: (char) => this._handleChatKey({ key: char, length: 1 }),
+    });
+    const kbH = this.chatKeyboard.h;
+
+    const gapAboveKb = 16;
+    const kbBottomMargin = 20;
+
+    const boxH = H - boxY - kbH - gapAboveKb - kbBottomMargin;
 
     const userStripH = 44;
     const inputRowH  = 80;
 
-    const kbMargin  = 40;
-    const kbW       = W - kbMargin * 2;
-    const kbX       = kbMargin;
-
-    // Log height is whatever remains between the user strip and the
-    // input row, minus the keyboard if it is currently visible.
-    // Computed here as a starting value; _applyChatKeyboardLayout
-    // recomputes and moves things when the keyboard is toggled.
     const logH = boxH - userStripH - inputRowH;
 
     this._mBoxX         = boxX;
@@ -784,24 +798,19 @@ export class ChatRoom extends App {
       onClick: () => this._sendMessage(),
     }));
 
-    // On-canvas keyboard, added to the screen (not the box) so it
-    // can live below the box. Built once, toggled via visible.
-    const kbY = boxY + boxH - 20;
-    this.chatKeyboard = new Keyboard({
-      x: kbX, y: kbY,
-      w: kbW,
-      onKey: (char) => this._handleChatKey({ key: char, length: 1 }),
-    });
+    // The keyboard lives in the reserved strip below the box.
+    const kbY = boxY + boxH + gapAboveKb;
+    this.chatKeyboard.x = kbX;
+    this.chatKeyboard.y = kbY;
     this.chatKeyboard.visible = false;
     screen.add(this.chatKeyboard);
 
-    // Hide the log lines that do not fit when the keyboard is up.
-    // _applyChatKeyboardLayout handles visibility.
     this._mKbY = kbY;
   }
 
   // Show or hide the on-canvas keyboard on the mobile chat screen.
-  // When visible, hide the lower log lines so they are not covered.
+  // The box does not move: the strip below the box is always
+  // reserved. Toggling the keyboard only changes its own visibility.
   _toggleChatKeyboard() {
     this._chatKeyboardVisible = !this._chatKeyboardVisible;
     this._applyChatKeyboardLayout();
@@ -814,27 +823,6 @@ export class ChatRoom extends App {
     this.chatKeyboard.visible = show;
     if (this.chatTypeToggle) {
       this.chatTypeToggle.setText(show ? "Hide" : "Type");
-    }
-
-    // Rescale the number of visible log lines to fit the space that
-    // is not covered by the keyboard. Simplest correct behavior:
-    // hide trailing lines that would sit under the keyboard.
-    const boxY = this._mBoxY;
-    const boxH = this._mBoxH;
-    const kbY  = this._mKbY;
-
-    const logTop = this._mLogTop;
-    const lineH  = this._mLineH;
-
-    if (!show) {
-      for (const t of this.messageTexts) t.visible = true;
-      return;
-    }
-
-    const kbTop = kbY - boxY;   // keyboard top in box-local coords
-    for (const t of this.messageTexts) {
-      const bottom = t.y + lineH;
-      t.visible = bottom <= kbTop - 4;
     }
   }
 

@@ -7,8 +7,15 @@
 // keyboard.
 //
 // Layout: three rows of letters (uppercase only) plus one row of
-// digits. Fixed for now. QWERTY, shift, lowercase, and symbols are
-// deliberate non-goals; extending is a one-file change here.
+// digits, plus a wide Backspace key at the end of the letters row.
+// QWERTY, shift, lowercase, and symbols are deliberate non-goals;
+// extending is a one-file change here.
+//
+// Backspace is a normal key to the consumer: it reports the string
+// "Backspace" via onKey, and the consumer handles it the same way it
+// would handle a physical backspace. The key occupies two column
+// slots plus the gap between them, so it is visually wide but the
+// layout math stays simple.
 //
 // Structure: a Composite full of Button children, one per key. Keys
 // are hit-tested and dispatched by the existing router like any
@@ -29,8 +36,8 @@ const ROWS = [
   ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"],
 ];
 
-const COLS     = 10;
-const GAP      = 6;
+const COLS      = 10;
+const GAP       = 6;
 const KEY_RATIO = 0.9;
 
 const KEY_FILL        = "#1f2a1f";
@@ -39,6 +46,13 @@ const KEY_STROKE_W    = 2;
 const KEY_RADIUS      = 6;
 const KEY_TEXT_COLOR  = "#e6efe6";
 const KEY_FONT        = "bold 26px sans-serif";
+const SPECIAL_KEY_FONT = "bold 18px sans-serif";
+
+// Row index and column index where the Backspace key is placed.
+// It sits immediately after Z in row 2 (zero-based), and is two
+// column slots wide.
+const BACKSPACE_ROW = 2;
+const BACKSPACE_COL = 6;
 
 export class Keyboard extends Composite {
   constructor(opts = {}) {
@@ -72,6 +86,24 @@ export class Keyboard extends Composite {
         this.add(btn);
       }
     }
+
+    // Wide Backspace key. Two column slots plus the gap between them.
+    const bsW = keyW * 2 + GAP;
+    const bsX = BACKSPACE_COL * (keyW + GAP);
+    const bsY = BACKSPACE_ROW * (keyH + GAP);
+
+    const backspaceBtn = new Button({
+      x: bsX, y: bsY,
+      w: bsW, h: keyH,
+      text: "Backspace",
+      fill:        KEY_FILL,
+      stroke:      KEY_STROKE,
+      strokeWidth: KEY_STROKE_W,
+      radius:      KEY_RADIUS,
+      textOptions: { font: SPECIAL_KEY_FONT, color: KEY_TEXT_COLOR },
+      onClick:     () => onKey("Backspace"),
+    });
+    this.add(backspaceBtn);
 
     // Composite's own h: informative for hit-testing and for callers
     // that want to position something below it. Not used for key
