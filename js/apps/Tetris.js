@@ -38,6 +38,18 @@
 // the well. Contains CCW / CW on top and a directional pad below
 // (left, right, down, double-down). Hidden while an overlay is up.
 //
+// Click suppression during gestures: a drag that starts in the well
+// and ends over the Show/Hide Controls button would otherwise fire
+// that button's onClick, because the EventRouter's mouseup branch
+// dispatches onClick before falling through to app.onEvent. To stop
+// that, Tetris arms _swallowClickUntil the moment a gesture mode
+// locks in (and again on gesture up, for the fast-drag case where
+// move never fired). Buttons whose onClick would fire during that
+// window consult _shouldSwallowClick() and return early. This is
+// deliberately local: only the buttons that sit under the play area
+// need to consult the flag today. If it recurs elsewhere, promote to
+// a shared mechanism.
+//
 // High score entry matches Snake: 3 initials via the shared Keyboard
 // composite on mobile, physical keyboard on desktop.
 //
@@ -92,6 +104,12 @@ const SWIPE_V_THRESHOLD = 40;   // vertical lock-in distance (higher: err horizo
 const SWIPE_STEP        = 24;   // finger travel per cell move (both axes)
 const TAP_MAX_MS        = 220;  // tap must be shorter than this
 const TAP_MAX_DIST      = 8;    // and travel less than this
+
+// How long after a gesture ends a click is still swallowed. Long
+// enough to cover the router dispatching onClick before app.onEvent
+// on the same mouseup, short enough that a deliberate tap on a
+// button right after a gesture still lands.
+const SWALLOW_CLICK_MS  = 50;
 
 // ---- Tetromino definitions ----
 
@@ -195,6 +213,11 @@ export class Tetris extends App {
     this._gStartTime = 0;
     this._gLastCellX = 0;
     this._gLastCellY = 0;
+
+    // Click-swallow window. Set the moment a gesture mode locks in,
+    // and again on gesture up. Any Button whose onClick would fire
+    // during this window is suppressed. See file header.
+    this._swallowClickUntil = 0;
 
     // Mobile controls visibility.
     this.controlsVisible = false;
@@ -693,7 +716,10 @@ export class Tetris extends App {
       strokeWidth: 2,
       radius: 8,
       textOptions: { font: "bold 22px sans-serif", color: "#d8cfee" },
-      onClick: () => this._toggleControls(),
+      onClick: () => {
+        if (this._shouldSwallowClick()) return;
+        this._toggleControls();
+      },
     });
     this.controlsStrip.add(this.controlsToggle);
 
@@ -735,7 +761,10 @@ export class Tetris extends App {
         strokeWidth: 2,
         radius: 8,
         textOptions: { font: "bold 28px sans-serif", color: "#d8cfee" },
-        onClick: () => this._onControlButton(d.kind),
+        onClick: () => {
+          if (this._shouldSwallowClick()) return;
+          this._onControlButton(d.kind);
+        },
       });
       b.visible = false;
       this.controlsStrip.add(b);
@@ -786,6 +815,14 @@ export class Tetris extends App {
     if (this.controlsStrip) {
       this.controlsStrip.visible = on;
     }
+  }
+
+  // True if a gesture very recently ended (or is in progress), so a
+  // click landing right now is almost certainly an artifact of the
+  // gesture's release point, not a deliberate press. See file header.
+  _shouldSwallowClick() {
+    if (this._gActive) return true;
+    return performance.now() < this._swallowClickUntil;
   }
 
   _buildOverOverlay() {
@@ -1394,9 +1431,11 @@ export class Tetris extends App {
       if (adx >= SWIPE_H_THRESHOLD && adx >= ady) {
         this._gMode = "h";
         this._gLastCellX = 0;
+        this._armSwallowClick();
       } else if (ady >= SWIPE_V_THRESHOLD && ady > adx) {
         this._gMode = "v";
         this._gLastCellY = 0;
+        this._armSwallowClick();
       }
       return;
     }
@@ -1445,7 +1484,16 @@ export class Tetris extends App {
         if (this._tryRotateCW()) this._repaintActive();
       }
     }
+    // Arm the swallow window on release too. Covers the case where
+    // the drag was fast enough that _onGestureMove never fired (or
+    // fired but mode stayed null), yet the release still landed
+    // outside the well on a Button. Harmless if already armed.
+    this._armSwallowClick();
     this._clearGesture();
+  }
+
+  _armSwallowClick() {
+    this._swallowClickUntil = performance.now() + SWALLOW_CLICK_MS;
   }
 
   _clearGesture() {

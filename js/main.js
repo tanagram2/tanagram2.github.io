@@ -6,7 +6,10 @@ import { HitTester }    from "./systems/HitTester.js";
 import { EventRouter }  from "./systems/EventRouter.js";
 import { AppManager }   from "./systems/AppManager.js";
 import { Viewport }     from "./systems/Viewport.js";
+import { applyBootDefaults } from "./boot/bootDefaults.js";
 import { OSApp }        from "./apps/OSApp.js";
+
+applyBootDefaults();
 
 Viewport.detect();
 

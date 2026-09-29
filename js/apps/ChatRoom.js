@@ -45,10 +45,14 @@
 // Eviction only fires when the slot holds ANOTHER client's content.
 //
 // Screens (all one canvas, toggled via visible):
-//   1. Token      - enters PAT, stored in localStorage.
-//   2. Username   - enters display name (not unique).
-//   3. Room list  - three rooms, occupancy shown as "?".
-//   4. Chat       - log + user list + input + Send + Update + Leave.
+//   1. Username   - enters display name (not unique).
+//   2. Room list  - three rooms, occupancy shown as "?".
+//   3. Chat       - log + user list + input + Send + Update + Leave.
+//
+// The session value used for Authorization is read from
+// localStorage at init. If it is missing or wrong, the network
+// error paths below surface it. There is no in-app entry screen
+// for it.
 
 import { App }       from "./App.js";
 import { Rect }      from "../primitives/Rect.js";
@@ -79,12 +83,14 @@ const OCCUPIED_MS      = 4 * 60 * 1000;  // 4 min: join-time "is someone here"
 const HEARTBEAT_MS     = 30 * 1000;      // every 30s
 const SYNC_MS          = 60 * 1000;      // periodic sync
 const UPDATE_THROTTLE  = 10 * 1000;      // manual Update cooldown
-const SEND_COOLDOWN    = 30 * 1000;      // min gap between sends
+const SEND_COOLDOWN    = 15 * 1000;      // min gap between sends
 const PUT_MAX_RETRIES  = 6;              // retries for a conflicted write
 const PUT_BACKOFF_MS   = 250;            // random 0..250 ms between retries
 const DEAD_CONFIRM_MS  = 1000;           // wait between the two dead-room reads
 
 const CURSOR_MS        = 500;            // blink half-period
+
+const SESSION_KEY = "canvasos.session.id";
 
 const API = "https://api.github.com/repos/" + OWNER + "/" + REPO + "/";
 
@@ -148,7 +154,7 @@ export class ChatRoom extends App {
   static displayName = "ChatRoom";
 
   init() {
-    this.token    = this._loadToken();
+    this.session  = this._loadSession();
     this.username = "";
 
     this.clientId = randomId();
@@ -167,10 +173,14 @@ export class ChatRoom extends App {
     this._lastUpdate = 0;
     this._lastSend   = 0;
 
+    // In-flight guards. Prevents a double-tap on Send or Update from
+    // firing two overlapping operations. Cleared in finally blocks.
+    this._sending  = false;
+    this._updating = false;
+
     this._cursorOn    = true;
     this._cursorTimer = 0;
 
-    this._tokenBuffer    = "";
     this._usernameBuffer = "";
     this.inputText       = "";
 
@@ -180,41 +190,28 @@ export class ChatRoom extends App {
 
     this._opChain = Promise.resolve();
 
-    this.stack = ["token"];
+    this.stack = ["username"];
 
-    this.tokenScreen    = this._buildTokenScreen();
     this.usernameScreen = this._buildUsernameScreen();
     this.roomScreen     = this._buildRoomScreen();
     this.chatScreen     = this._buildChatScreen();
 
-    this.root.add(this.tokenScreen);
     this.root.add(this.usernameScreen);
     this.root.add(this.roomScreen);
     this.root.add(this.chatScreen);
 
-    this._applyScreen("token");
-    this._refreshTokenField();
+    this._applyScreen("username");
     this._refreshUsernameField();
     this._refreshChatInput();
   }
 
-  // ---------- Token persistence ----------
+  // ---------- Session persistence ----------
 
-  _loadToken() {
+  _loadSession() {
     try {
-      return localStorage.getItem("canvasos.chatroom.token") || "";
+      return localStorage.getItem(SESSION_KEY) || "";
     } catch (e) {
       return "";
-    }
-  }
-
-  _saveToken(tok) {
-    this.token = tok;
-    try {
-      if (tok) localStorage.setItem("canvasos.chatroom.token", tok);
-      else     localStorage.removeItem("canvasos.chatroom.token");
-    } catch (e) {
-      // localStorage may be unavailable.
     }
   }
 
@@ -233,107 +230,10 @@ export class ChatRoom extends App {
     label.setText(buffer + (this._cursorOn ? "|" : " "));
   }
 
-  _refreshTokenField()    { this._renderField(this.tokenFieldLabel,    this._tokenBuffer); }
   _refreshUsernameField() { this._renderField(this.usernameFieldLabel, this._usernameBuffer); }
   _refreshChatInput()     { this._renderField(this.inputLabel,         this.inputText); }
 
   // ---------- Screens ----------
-
-  _buildTokenScreen() {
-    const W = Viewport.width;
-
-    const screen = new Panel({
-      x: 0, y: 0, w: "100%", h: "100%",
-      fill: "#101820",
-      stroke: null,
-    });
-
-    screen.add(new Button({
-      x: 24, y: 24, w: 140, h: 48,
-      text: "Return",
-      fill: "#2a2a3a",
-      stroke: "#5a5a7a",
-      strokeWidth: 2,
-      radius: 8,
-      textOptions: { font: "bold 18px sans-serif", color: "#ffffff" },
-      onClick: () => this.exit(),
-    }));
-
-    const cx = W / 2;
-
-    screen.add(new Text({
-      x: cx, y: 180,
-      text: "Enter Token:",
-      font: "bold 36px sans-serif",
-      color: "#d8e4f7",
-      align: "center",
-      baseline: "middle",
-    }));
-
-    const fieldW = 720;
-    const fieldH = 56;
-    const fieldX = cx - fieldW / 2;
-    const fieldY = 240;
-
-    const field = new Panel({
-      x: fieldX, y: fieldY, w: fieldW, h: fieldH,
-      fill: "#0a1018",
-      stroke: "#3a4d70",
-      strokeWidth: 2,
-      radius: 6,
-    });
-    screen.add(field);
-
-    this.tokenFieldLabel = new Label({
-      x: 0, y: 0, w: "100%", h: "100%",
-      text: "",
-      textOptions: {
-        font: "18px monospace",
-        color: "#d8e4f7",
-        align: "left",
-        baseline: "middle",
-      },
-    });
-    this.tokenFieldLabel.text.x = 14;
-    this.tokenFieldLabel.text.y = "50%";
-    field.add(this.tokenFieldLabel);
-
-    this.tokenErrorLabel = new Text({
-      x: cx, y: fieldY + fieldH + 24,
-      text: "",
-      font: "16px monospace",
-      color: "#e06060",
-      align: "center",
-      baseline: "middle",
-    });
-    screen.add(this.tokenErrorLabel);
-
-    screen.add(new Button({
-      x: fieldX, y: fieldY + fieldH + 44,
-      w: 140, h: 44,
-      text: "Paste",
-      fill: "#2a2a3a",
-      stroke: "#5a5a7a",
-      strokeWidth: 2,
-      radius: 8,
-      textOptions: { font: "bold 16px sans-serif", color: "#ffffff" },
-      onClick: () => this._pasteIntoToken(),
-    }));
-
-    screen.add(new Button({
-      x: cx - 110, y: fieldY + fieldH + 100,
-      w: 220, h: 56,
-      text: "Continue",
-      fill: "#2a3552",
-      stroke: "#6a86b8",
-      strokeWidth: 2,
-      radius: 8,
-      textOptions: { font: "bold 20px sans-serif", color: "#ffffff" },
-      onClick: () => this._submitToken(),
-    }));
-
-    return screen;
-  }
 
   _buildUsernameScreen() {
     const W = Viewport.width;
@@ -352,7 +252,7 @@ export class ChatRoom extends App {
       strokeWidth: 2,
       radius: 8,
       textOptions: { font: "bold 18px sans-serif", color: "#ffffff" },
-      onClick: () => this._goBack(),
+      onClick: () => this.exit(),
     }));
 
     const cx = W / 2;
@@ -657,7 +557,6 @@ export class ChatRoom extends App {
   // ---------- Screen navigation ----------
 
   _applyScreen(name) {
-    this.tokenScreen.visible    = name === "token";
     this.usernameScreen.visible = name === "username";
     this.roomScreen.visible     = name === "room";
     this.chatScreen.visible     = name === "chat";
@@ -669,7 +568,6 @@ export class ChatRoom extends App {
       this._stopTimers();
     }
 
-    this._refreshTokenField();
     this._refreshUsernameField();
     this._refreshChatInput();
 
@@ -718,36 +616,6 @@ export class ChatRoom extends App {
     this._setStatus("");
   }
 
-  // ---------- Token submit / paste ----------
-
-  _submitToken() {
-    const tok = this._tokenBuffer.trim();
-    if (!tok) {
-      this.tokenErrorLabel.text = "Token required.";
-      return;
-    }
-    this.tokenErrorLabel.text = "";
-    this._saveToken(tok);
-    this._pushScreen("username");
-  }
-
-  async _pasteIntoToken() {
-    if (!navigator.clipboard || !navigator.clipboard.readText) {
-      this.tokenErrorLabel.text = "Paste not available in this browser.";
-      return;
-    }
-    try {
-      const text = await navigator.clipboard.readText();
-      if (text) {
-        this._tokenBuffer = text.trim();
-        this._refreshTokenField();
-        this.tokenErrorLabel.text = "";
-      }
-    } catch (e) {
-      this.tokenErrorLabel.text = "Paste was blocked. Type it manually or allow clipboard access.";
-    }
-  }
-
   // ---------- Username submit ----------
 
   _submitUsername() {
@@ -767,7 +635,7 @@ export class ChatRoom extends App {
 
   _authHeaders() {
     return {
-      "Authorization": "Bearer " + this.token,
+      "Authorization": "Bearer " + this.session,
       "Accept": "application/vnd.github+json",
       "X-GitHub-Api-Version": "2022-11-28",
     };
@@ -780,7 +648,7 @@ export class ChatRoom extends App {
   async _readRef() {
     const url = API + "git/ref/heads/" + encodeURIComponent(BRANCH);
     const res = await fetch(url, { headers: this._authHeaders(), cache: "no-store" });
-    if (res.status === 401) throw new Error("BAD_TOKEN");
+    if (res.status === 401) throw new Error("BAD_SESSION");
     if (!res.ok) throw new Error("READ_REF_FAILED_" + res.status);
     const json = await res.json();
     return json.object.sha;
@@ -789,7 +657,7 @@ export class ChatRoom extends App {
   async _readCommitTreeSha(commitSha) {
     const url = API + "git/commits/" + commitSha;
     const res = await fetch(url, { headers: this._authHeaders(), cache: "no-store" });
-    if (res.status === 401) throw new Error("BAD_TOKEN");
+    if (res.status === 401) throw new Error("BAD_SESSION");
     if (!res.ok) throw new Error("READ_COMMIT_FAILED_" + res.status);
     const json = await res.json();
     return json.tree.sha;
@@ -798,7 +666,7 @@ export class ChatRoom extends App {
   async _readTreeEntries(treeSha) {
     const url = API + "git/trees/" + treeSha + "?recursive=1";
     const res = await fetch(url, { headers: this._authHeaders(), cache: "no-store" });
-    if (res.status === 401) throw new Error("BAD_TOKEN");
+    if (res.status === 401) throw new Error("BAD_SESSION");
     if (!res.ok) throw new Error("READ_TREE_FAILED_" + res.status);
     const json = await res.json();
 
@@ -814,7 +682,7 @@ export class ChatRoom extends App {
   async _readBlob(blobSha) {
     const url = API + "git/blobs/" + blobSha;
     const res = await fetch(url, { headers: this._authHeaders(), cache: "no-store" });
-    if (res.status === 401) throw new Error("BAD_TOKEN");
+    if (res.status === 401) throw new Error("BAD_SESSION");
     if (!res.ok) throw new Error("READ_BLOB_FAILED_" + res.status);
     const json = await res.json();
     if (!json.content) return "";
@@ -850,7 +718,7 @@ export class ChatRoom extends App {
       headers: this._jsonHeaders(),
       body: JSON.stringify({ content: toBase64(content), encoding: "base64" }),
     });
-    if (res.status === 401) throw new Error("BAD_TOKEN");
+    if (res.status === 401) throw new Error("BAD_SESSION");
     if (!res.ok) throw new Error("CREATE_BLOB_FAILED_" + res.status);
     const json = await res.json();
     return json.sha;
@@ -866,7 +734,7 @@ export class ChatRoom extends App {
       headers: this._jsonHeaders(),
       body: JSON.stringify(body),
     });
-    if (res.status === 401) throw new Error("BAD_TOKEN");
+    if (res.status === 401) throw new Error("BAD_SESSION");
     if (!res.ok) throw new Error("CREATE_TREE_FAILED_" + res.status);
     const json = await res.json();
     return json.sha;
@@ -895,7 +763,7 @@ export class ChatRoom extends App {
       headers: this._jsonHeaders(),
       body: JSON.stringify(body),
     });
-    if (res.status === 401) throw new Error("BAD_TOKEN");
+    if (res.status === 401) throw new Error("BAD_SESSION");
     if (!res.ok) throw new Error("CREATE_COMMIT_FAILED_" + res.status);
     const json = await res.json();
     return json.sha;
@@ -908,7 +776,7 @@ export class ChatRoom extends App {
       headers: this._jsonHeaders(),
       body: JSON.stringify({ sha: newCommitSha, force: false }),
     });
-    if (res.status === 401) throw new Error("BAD_TOKEN");
+    if (res.status === 401) throw new Error("BAD_SESSION");
     if (res.status === 409 || res.status === 422) throw new Error("CONFLICT");
     if (!res.ok) throw new Error("PATCH_REF_FAILED_" + res.status);
   }
@@ -925,7 +793,7 @@ export class ChatRoom extends App {
         treeSha          = await this._readCommitTreeSha(currentCommitSha);
         entries          = await this._readTreeEntries(treeSha);
       } catch (e) {
-        if (e.message === "BAD_TOKEN") throw e;
+        if (e.message === "BAD_SESSION") throw e;
         lastError = e;
         await this._sleep(Math.random() * PUT_BACKOFF_MS);
         continue;
@@ -937,7 +805,7 @@ export class ChatRoom extends App {
         try {
           currentContent = await this._readBlob(entry.sha);
         } catch (e) {
-          if (e.message === "BAD_TOKEN") throw e;
+          if (e.message === "BAD_SESSION") throw e;
           lastError = e;
           await this._sleep(Math.random() * PUT_BACKOFF_MS);
           continue;
@@ -962,7 +830,7 @@ export class ChatRoom extends App {
         newTreeSha   = await this._createTreeWithChange(treeSha, path, newBlobSha);
         newCommitSha = await this._createCommit(newTreeSha, currentCommitSha, message);
       } catch (e) {
-        if (e.message === "BAD_TOKEN") throw e;
+        if (e.message === "BAD_SESSION") throw e;
         lastError = e;
         await this._sleep(Math.random() * PUT_BACKOFF_MS);
         continue;
@@ -972,7 +840,7 @@ export class ChatRoom extends App {
       try {
         verifyRef = await this._readRef();
       } catch (e) {
-        if (e.message === "BAD_TOKEN") throw e;
+        if (e.message === "BAD_SESSION") throw e;
         lastError = e;
         await this._sleep(Math.random() * PUT_BACKOFF_MS);
         continue;
@@ -992,7 +860,7 @@ export class ChatRoom extends App {
       try {
         await this._patchRef(newCommitSha);
       } catch (e) {
-        if (e.message === "BAD_TOKEN") throw e;
+        if (e.message === "BAD_SESSION") throw e;
         try {
           const postRef = await this._readRef();
           if (postRef === newCommitSha) {
@@ -1000,7 +868,7 @@ export class ChatRoom extends App {
             return true;
           }
         } catch (e2) {
-          if (e2.message === "BAD_TOKEN") throw e2;
+          if (e2.message === "BAD_SESSION") throw e2;
         }
         lastError = e;
         await this._sleep(Math.random() * PUT_BACKOFF_MS);
@@ -1039,7 +907,7 @@ export class ChatRoom extends App {
             }
           }
         } catch (e) {
-          if (e.message === "BAD_TOKEN") throw e;
+          if (e.message === "BAD_SESSION") throw e;
         }
         out.push(rec);
       }
@@ -1101,7 +969,7 @@ export class ChatRoom extends App {
             "reset " + room + " log"
           );
         } catch (e) {
-          if (e.message === "BAD_TOKEN") {
+          if (e.message === "BAD_SESSION") {
             this._handleApiError(e, "reset log");
             return;
           }
@@ -1116,7 +984,7 @@ export class ChatRoom extends App {
               "reset slot " + s
             );
           } catch (e) {
-            if (e.message === "BAD_TOKEN") {
+            if (e.message === "BAD_SESSION") {
               this._handleApiError(e, "reset presence");
               return;
             }
@@ -1192,7 +1060,7 @@ export class ChatRoom extends App {
           "claim slot " + s
         );
       } catch (e) {
-        if (e.message === "BAD_TOKEN") throw e;
+        if (e.message === "BAD_SESSION") throw e;
         continue;
       }
 
@@ -1294,7 +1162,7 @@ export class ChatRoom extends App {
         )
       );
     } catch (e) {
-      if (e.message === "BAD_TOKEN") {
+      if (e.message === "BAD_SESSION") {
         this._handleApiError(e, "heartbeat");
         return;
       }
@@ -1312,6 +1180,8 @@ export class ChatRoom extends App {
   // ---------- Sync ----------
 
   async _manualUpdate() {
+    if (this._updating) return;
+
     const now = Date.now();
     if (now - this._lastUpdate < UPDATE_THROTTLE) {
       const remain = Math.ceil((UPDATE_THROTTLE - (now - this._lastUpdate)) / 1000);
@@ -1319,13 +1189,18 @@ export class ChatRoom extends App {
       setTimeout(() => this._clearStatus(), 2000);
       return;
     }
+
+    this._updating = true;
     this._lastUpdate = now;
     this._setStatus("Updating...");
+
     try {
       await this._sync();
       this._clearStatus();
     } catch (e) {
       this._handleApiError(e, "update");
+    } finally {
+      this._updating = false;
     }
   }
 
@@ -1342,7 +1217,7 @@ export class ChatRoom extends App {
         try {
           logContent = await this._readBlob(logEntry.sha);
         } catch (e) {
-          if (e.message === "BAD_TOKEN") { this._handleApiError(e, "sync log"); return; }
+          if (e.message === "BAD_SESSION") { this._handleApiError(e, "sync log"); return; }
           throw e;
         }
       }
@@ -1373,7 +1248,7 @@ export class ChatRoom extends App {
               if (parsed) rec = parsed;
             }
           } catch (e) {
-            if (e.message === "BAD_TOKEN") { this._handleApiError(e, "sync presence"); return; }
+            if (e.message === "BAD_SESSION") { this._handleApiError(e, "sync presence"); return; }
           }
         }
         presence.push(rec);
@@ -1447,6 +1322,11 @@ export class ChatRoom extends App {
   async _sendMessage() {
     if (this.room === null || this.slot === null) return;
 
+    // In-flight guard: a second Send tap while the first is still
+    // talking to GitHub is dropped on the floor. This is what keeps
+    // a double-tap from firing two overlapping writes.
+    if (this._sending) return;
+
     const text = this.inputText.trim();
     if (!text) return;
 
@@ -1457,6 +1337,13 @@ export class ChatRoom extends App {
       setTimeout(() => this._clearStatus(), 2000);
       return;
     }
+
+    this._sending = true;
+    // Stamp on commitment, not on success. The cooldown is measured
+    // from "user tried to send", which is what a user actually
+    // perceives. A failed write burning a cooldown slot is rare
+    // enough that this is the right trade.
+    this._lastSend = now;
 
     const safe = text.replace(/\|/g, "/").replace(/\n/g, " ").replace(/\r/g, " ");
     const iso  = nowIso();
@@ -1480,7 +1367,6 @@ export class ChatRoom extends App {
         this._renderMessages();
       }
 
-      this._lastSend = now;
       this.inputText = "";
       this._refreshChatInput();
       this._clearStatus();
@@ -1491,12 +1377,14 @@ export class ChatRoom extends App {
         // Non-fatal.
       }
     } catch (e) {
-      if (e.message === "BAD_TOKEN") {
+      if (e.message === "BAD_SESSION") {
         this._handleApiError(e, "send");
         return;
       }
       this._setStatus("Send failed. Try again.");
       setTimeout(() => this._clearStatus(), 3000);
+    } finally {
+      this._sending = false;
     }
   }
 
@@ -1508,25 +1396,8 @@ export class ChatRoom extends App {
 
     const top = this.stack[this.stack.length - 1];
 
-    if (top === "token")    { this._handleTokenKey(e);    return; }
     if (top === "username") { this._handleUsernameKey(e); return; }
     if (top === "chat")     { this._handleChatKey(e);     return; }
-  }
-
-  _handleTokenKey(e) {
-    if (e.key === "Backspace") {
-      this._tokenBuffer = this._tokenBuffer.slice(0, -1);
-      this._refreshTokenField();
-      return;
-    }
-    if (e.key === "Enter") {
-      this._submitToken();
-      return;
-    }
-    if (e.key.length === 1) {
-      this._tokenBuffer += e.key;
-      this._refreshTokenField();
-    }
   }
 
   _handleUsernameKey(e) {
@@ -1564,15 +1435,10 @@ export class ChatRoom extends App {
   // ---------- Error handling ----------
 
   _handleApiError(e, where) {
-    if (e && e.message === "BAD_TOKEN") {
-      this._saveToken("");
+    if (e && e.message === "BAD_SESSION") {
       this._stopTimers();
       this._leaveRoomInternal();
-      this.stack = ["token"];
-      this._applyScreen("token");
-      this.tokenErrorLabel.text = "That token did not work. Check it and try again.";
-      this._tokenBuffer = "";
-      this._refreshTokenField();
+      this._setStatus("Session unavailable.");
       return;
     }
     this._setStatus("Error during " + where + ": " + (e && e.message ? e.message : "unknown"));
@@ -1586,14 +1452,13 @@ export class ChatRoom extends App {
 
   update(dt) {
     const top = this.stack[this.stack.length - 1];
-    if (top !== "token" && top !== "username" && top !== "chat") return;
+    if (top !== "username" && top !== "chat") return;
 
     this._cursorTimer += dt * 1000;
     if (this._cursorTimer >= CURSOR_MS) {
       this._cursorTimer -= CURSOR_MS;
       this._cursorOn = !this._cursorOn;
 
-      if (top === "token")    this._refreshTokenField();
       if (top === "username") this._refreshUsernameField();
       if (top === "chat")     this._refreshChatInput();
     }
