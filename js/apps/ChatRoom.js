@@ -53,6 +53,13 @@
 // localStorage at init. If it is missing or wrong, the network
 // error paths below surface it. There is no in-app entry screen
 // for it.
+//
+// Desktop layout: wide box, chat log on the left and user list as a
+// right-hand column. Mobile layout: user list becomes a slim
+// horizontal strip at the top of the chat box, log below, input row
+// at the bottom. Mobile text entry uses the shared Keyboard
+// composite (uppercase + digits only, for now) toggled by a button
+// on the chat screen; the username screen shows it always.
 
 import { App }       from "./App.js";
 import { Rect }      from "../primitives/Rect.js";
@@ -60,6 +67,7 @@ import { Text }      from "../primitives/Text.js";
 import { Panel }     from "../composites/Panel.js";
 import { Button }    from "../composites/Button.js";
 import { Label }     from "../composites/Label.js";
+import { Keyboard }  from "../composites/Keyboard.js";
 import { Viewport }  from "../systems/Viewport.js";
 
 // -----------------------------------------------------------------
@@ -154,6 +162,8 @@ export class ChatRoom extends App {
   static displayName = "ChatRoom";
 
   init() {
+    this.mobile = Viewport.isMobile;
+
     this.session  = this._loadSession();
     this.username = "";
 
@@ -183,6 +193,9 @@ export class ChatRoom extends App {
 
     this._usernameBuffer = "";
     this.inputText       = "";
+
+    // Mobile chat-screen keyboard visibility.
+    this._chatKeyboardVisible = false;
 
     this._joining = false;
 
@@ -237,6 +250,7 @@ export class ChatRoom extends App {
 
   _buildUsernameScreen() {
     const W = Viewport.width;
+    const H = Viewport.height;
 
     const screen = new Panel({
       x: 0, y: 0, w: "100%", h: "100%",
@@ -257,19 +271,21 @@ export class ChatRoom extends App {
 
     const cx = W / 2;
 
+    const titleY = this.mobile ? 140 : 200;
+
     screen.add(new Text({
-      x: cx, y: 200,
+      x: cx, y: titleY,
       text: "Username:",
-      font: "bold 36px sans-serif",
+      font: this.mobile ? "bold 40px sans-serif" : "bold 36px sans-serif",
       color: "#d8e4f7",
       align: "center",
       baseline: "middle",
     }));
 
-    const fieldW = 720;
-    const fieldH = 56;
+    const fieldW = this.mobile ? W - 80 : 720;
+    const fieldH = this.mobile ? 72 : 56;
     const fieldX = cx - fieldW / 2;
-    const fieldY = 260;
+    const fieldY = this.mobile ? titleY + 60 : 260;
 
     const field = new Panel({
       x: fieldX, y: fieldY, w: fieldW, h: fieldH,
@@ -284,7 +300,7 @@ export class ChatRoom extends App {
       x: 0, y: 0, w: "100%", h: "100%",
       text: "",
       textOptions: {
-        font: "18px monospace",
+        font: this.mobile ? "22px monospace" : "18px monospace",
         color: "#d8e4f7",
         align: "left",
         baseline: "middle",
@@ -295,7 +311,7 @@ export class ChatRoom extends App {
     field.add(this.usernameFieldLabel);
 
     this.usernameErrorLabel = new Text({
-      x: cx, y: fieldY + fieldH + 28,
+      x: cx, y: fieldY + fieldH + 24,
       text: "",
       font: "16px monospace",
       color: "#e06060",
@@ -304,17 +320,52 @@ export class ChatRoom extends App {
     });
     screen.add(this.usernameErrorLabel);
 
-    screen.add(new Button({
-      x: cx - 110, y: fieldY + fieldH + 70,
-      w: 220, h: 56,
-      text: "Enter",
-      fill: "#2a3552",
-      stroke: "#6a86b8",
-      strokeWidth: 2,
-      radius: 8,
-      textOptions: { font: "bold 20px sans-serif", color: "#ffffff" },
-      onClick: () => this._submitUsername(),
-    }));
+    if (this.mobile) {
+      // Keyboard always visible on mobile. Continue button sits
+      // below it.
+      const kbMargin = 40;
+      const kbW      = W - kbMargin * 2;
+      const kbX      = kbMargin;
+      const kbY      = fieldY + fieldH + 60;
+
+      this.usernameKeyboard = new Keyboard({
+        x: kbX, y: kbY,
+        w: kbW,
+        onKey: (char) => this._handleUsernameKey({ key: char, length: 1 }),
+      });
+      screen.add(this.usernameKeyboard);
+
+      const kbH   = this.usernameKeyboard.h;
+      const btnW  = kbW;
+      const btnH  = 72;
+      const btnX  = kbX;
+      const btnY  = kbY + kbH + 20;
+
+      screen.add(new Button({
+        x: btnX, y: btnY, w: btnW, h: btnH,
+        text: "Enter",
+        fill: "#2a3552",
+        stroke: "#6a86b8",
+        strokeWidth: 2,
+        radius: 8,
+        textOptions: { font: "bold 26px sans-serif", color: "#ffffff" },
+        onClick: () => this._submitUsername(),
+      }));
+    } else {
+      this.usernameKeyboard = null;
+
+      screen.add(new Button({
+        x: cx - 110, y: fieldY + fieldH + 70,
+        w: 220, h: 56,
+        text: "Enter",
+        fill: "#2a3552",
+        stroke: "#6a86b8",
+        strokeWidth: 2,
+        radius: 8,
+        textOptions: { font: "bold 20px sans-serif", color: "#ffffff" },
+        onClick: () => this._submitUsername(),
+      }));
+    }
 
     return screen;
   }
@@ -342,18 +393,18 @@ export class ChatRoom extends App {
     const cx = W / 2;
 
     screen.add(new Text({
-      x: cx, y: 160,
+      x: cx, y: this.mobile ? 140 : 160,
       text: "Select a Room:",
-      font: "bold 36px sans-serif",
+      font: this.mobile ? "bold 40px sans-serif" : "bold 36px sans-serif",
       color: "#d8e4f7",
       align: "center",
       baseline: "middle",
     }));
 
-    const btnW = 480;
-    const btnH = 72;
-    const gap  = 20;
-    let   y    = 260;
+    const btnW = this.mobile ? W - 80 : 480;
+    const btnH = this.mobile ? 96 : 72;
+    const gap  = this.mobile ? 24 : 20;
+    let   y    = this.mobile ? 240 : 260;
 
     this.roomButtons = {};
 
@@ -366,7 +417,10 @@ export class ChatRoom extends App {
         stroke: "#3a4d70",
         strokeWidth: 2,
         radius: 8,
-        textOptions: { font: "bold 22px sans-serif", color: "#d8e4f7" },
+        textOptions: {
+          font: this.mobile ? "bold 28px sans-serif" : "bold 22px sans-serif",
+          color: "#d8e4f7",
+        },
         onClick: () => this._joinRoom(roomName),
       });
       screen.add(btn);
@@ -375,9 +429,9 @@ export class ChatRoom extends App {
     }
 
     this.roomStatusLabel = new Text({
-      x: cx, y: 520,
+      x: cx, y: this.mobile ? y + 20 : 520,
       text: "",
-      font: "16px monospace",
+      font: this.mobile ? "18px monospace" : "16px monospace",
       color: "#8fa9d0",
       align: "center",
       baseline: "middle",
@@ -397,6 +451,7 @@ export class ChatRoom extends App {
       stroke: null,
     });
 
+    // Top bar: Leave on the left, Update on the right.
     screen.add(new Button({
       x: 24, y: 24, w: 140, h: 48,
       text: "Leave",
@@ -419,6 +474,41 @@ export class ChatRoom extends App {
       onClick: () => this._manualUpdate(),
     }));
 
+    this.roomTitleLabel = new Text({
+      x: W / 2,
+      y: 48,
+      text: "",
+      font: this.mobile ? "bold 22px sans-serif" : "bold 20px sans-serif",
+      color: "#d8e4f7",
+      align: "center",
+      baseline: "middle",
+    });
+    screen.add(this.roomTitleLabel);
+
+    this.statusLabel = new Text({
+      x: 24,
+      y: this.mobile ? 100 : 84,
+      text: "",
+      font: this.mobile ? "16px monospace" : "14px monospace",
+      color: "#8fa9d0",
+      align: "left",
+      baseline: "middle",
+    });
+    screen.add(this.statusLabel);
+
+    if (this.mobile) {
+      this._buildChatScreenMobile(screen);
+    } else {
+      this._buildChatScreenDesktop(screen);
+    }
+
+    return screen;
+  }
+
+  _buildChatScreenDesktop(screen) {
+    const W = Viewport.width;
+    const H = Viewport.height;
+
     const boxW = Math.min(W - 120, 1100);
     const boxH = Math.min(H - 180, 620);
     const boxX = (W - boxW) / 2;
@@ -427,10 +517,7 @@ export class ChatRoom extends App {
     const userColW = 220;
     const inputRowH = 64;
 
-    this._boxX = boxX; this._boxY = boxY;
-    this._boxW = boxW; this._boxH = boxH;
-    this._userColW = userColW;
-    this._inputRowH = inputRowH;
+    this._maxLines = Math.floor((boxH - inputRowH - 20) / 22);
 
     const box = new Panel({
       x: boxX, y: boxY, w: boxW, h: boxH,
@@ -454,8 +541,6 @@ export class ChatRoom extends App {
       fill: "#2a3552",
       stroke: null,
     }));
-
-    this._maxLines = Math.floor((boxH - inputRowH - 20) / 22);
 
     this.messageTexts = [];
     for (let i = 0; i < this._maxLines; i++) {
@@ -529,29 +614,228 @@ export class ChatRoom extends App {
       onClick: () => this._sendMessage(),
     }));
 
-    this.statusLabel = new Text({
-      x: boxX,
-      y: boxY - 26,
-      text: "",
-      font: "14px monospace",
-      color: "#8fa9d0",
-      align: "left",
-      baseline: "middle",
-    });
-    screen.add(this.statusLabel);
+    this.chatKeyboard = null;
+    this.chatTypeToggle = null;
+  }
 
-    this.roomTitleLabel = new Text({
-      x: boxX + boxW / 2,
-      y: boxY - 26,
-      text: "",
-      font: "bold 20px sans-serif",
-      color: "#d8e4f7",
-      align: "center",
-      baseline: "middle",
-    });
-    screen.add(this.roomTitleLabel);
+  _buildChatScreenMobile(screen) {
+    const W = Viewport.width;
+    const H = Viewport.height;
 
-    return screen;
+    // Layout regions, top to bottom:
+    //   - top bar (Leave/Update/title): y 0..84
+    //   - status label: y ~100
+    //   - box (users strip, log, input row): starts at 130
+    //   - keyboard (when visible) sits below the input row.
+    const boxX = 20;
+    const boxY = 130;
+    const boxW = W - 40;
+    const boxH = H - boxY - 20;
+
+    const userStripH = 44;
+    const inputRowH  = 80;
+
+    const kbMargin  = 40;
+    const kbW       = W - kbMargin * 2;
+    const kbX       = kbMargin;
+
+    // Log height is whatever remains between the user strip and the
+    // input row, minus the keyboard if it is currently visible.
+    // Computed here as a starting value; _applyChatKeyboardLayout
+    // recomputes and moves things when the keyboard is toggled.
+    const logH = boxH - userStripH - inputRowH;
+
+    this._mBoxX         = boxX;
+    this._mBoxY         = boxY;
+    this._mBoxW         = boxW;
+    this._mBoxH         = boxH;
+    this._mUserStripH   = userStripH;
+    this._mInputRowH    = inputRowH;
+    this._mKbX          = kbX;
+    this._mKbW          = kbW;
+    this._mLogH         = logH;
+
+    const box = new Panel({
+      x: boxX, y: boxY, w: boxW, h: boxH,
+      fill: "#0c121a",
+      stroke: "#3a4d70",
+      strokeWidth: 2,
+      radius: 8,
+    });
+    screen.add(box);
+    this._mBox = box;
+
+    // Separator under the user strip.
+    box.add(new Rect({
+      x: 0, y: userStripH - 1,
+      w: boxW, h: 2,
+      fill: "#2a3552",
+      stroke: null,
+    }));
+
+    // Separator above the input row.
+    box.add(new Rect({
+      x: 0, y: boxH - inputRowH - 1,
+      w: boxW, h: 2,
+      fill: "#2a3552",
+      stroke: null,
+    }));
+
+    // User strip: one Text per slot, laid out horizontally.
+    this.userTexts = [];
+    const slotFont = "14px monospace";
+    for (let s = 0; s < SLOTS; s++) {
+      const t = new Text({
+        x: 10 + s * 68,
+        y: userStripH / 2,
+        text: "",
+        font: slotFont,
+        color: "#7a8a9a",
+        align: "left",
+        baseline: "middle",
+      });
+      box.add(t);
+      this.userTexts.push(t);
+    }
+
+    // Log area. Text nodes are positioned relative to the box, with
+    // the strip offset baked in via y.
+    const logTop = userStripH + 8;
+    const lineH  = 20;
+    const linesFit = Math.max(1, Math.floor((logH - 16) / lineH));
+
+    this._maxLines     = linesFit;
+    this._mLogTop      = logTop;
+    this._mLineH       = lineH;
+
+    this.messageTexts = [];
+    for (let i = 0; i < linesFit; i++) {
+      const t = new Text({
+        x: 12, y: logTop + i * lineH,
+        text: "",
+        font: "14px monospace",
+        color: "#d8e4f7",
+        align: "left",
+        baseline: "top",
+      });
+      box.add(t);
+      this.messageTexts.push(t);
+    }
+
+    // Input row: input panel on the left, Type and Send buttons on
+    // the right.
+    const inputY = boxH - inputRowH + 10;
+    const inputH = inputRowH - 20;
+
+    const btnW = 90;
+    const btnGap = 8;
+    const sendX = boxW - 12 - btnW;
+    const typeX = sendX - btnGap - btnW;
+
+    const inputX = 12;
+    const inputW = typeX - btnGap - inputX;
+
+    const inputPanel = new Panel({
+      x: inputX, y: inputY,
+      w: inputW, h: inputH,
+      fill: "#0a1018",
+      stroke: "#2a3552",
+      strokeWidth: 2,
+      radius: 6,
+    });
+    box.add(inputPanel);
+
+    this.inputLabel = new Label({
+      x: 0, y: 0, w: "100%", h: "100%",
+      text: "",
+      textOptions: {
+        font: "18px monospace",
+        color: "#d8e4f7",
+        align: "left",
+        baseline: "middle",
+      },
+    });
+    this.inputLabel.text.x = 12;
+    this.inputLabel.text.y = "50%";
+    inputPanel.add(this.inputLabel);
+
+    this.chatTypeToggle = new Button({
+      x: typeX, y: inputY,
+      w: btnW, h: inputH,
+      text: "Type",
+      fill: "#2a2a3a",
+      stroke: "#5a5a7a",
+      strokeWidth: 2,
+      radius: 6,
+      textOptions: { font: "bold 18px sans-serif", color: "#ffffff" },
+      onClick: () => this._toggleChatKeyboard(),
+    });
+    box.add(this.chatTypeToggle);
+
+    box.add(new Button({
+      x: sendX, y: inputY,
+      w: btnW, h: inputH,
+      text: "Send",
+      fill: "#2a4a2a",
+      stroke: "#6a9a6a",
+      strokeWidth: 2,
+      radius: 6,
+      textOptions: { font: "bold 18px sans-serif", color: "#ffffff" },
+      onClick: () => this._sendMessage(),
+    }));
+
+    // On-canvas keyboard, added to the screen (not the box) so it
+    // can live below the box. Built once, toggled via visible.
+    const kbY = boxY + boxH - 20;
+    this.chatKeyboard = new Keyboard({
+      x: kbX, y: kbY,
+      w: kbW,
+      onKey: (char) => this._handleChatKey({ key: char, length: 1 }),
+    });
+    this.chatKeyboard.visible = false;
+    screen.add(this.chatKeyboard);
+
+    // Hide the log lines that do not fit when the keyboard is up.
+    // _applyChatKeyboardLayout handles visibility.
+    this._mKbY = kbY;
+  }
+
+  // Show or hide the on-canvas keyboard on the mobile chat screen.
+  // When visible, hide the lower log lines so they are not covered.
+  _toggleChatKeyboard() {
+    this._chatKeyboardVisible = !this._chatKeyboardVisible;
+    this._applyChatKeyboardLayout();
+  }
+
+  _applyChatKeyboardLayout() {
+    if (!this.mobile) return;
+
+    const show = this._chatKeyboardVisible;
+    this.chatKeyboard.visible = show;
+    if (this.chatTypeToggle) {
+      this.chatTypeToggle.setText(show ? "Hide" : "Type");
+    }
+
+    // Rescale the number of visible log lines to fit the space that
+    // is not covered by the keyboard. Simplest correct behavior:
+    // hide trailing lines that would sit under the keyboard.
+    const boxY = this._mBoxY;
+    const boxH = this._mBoxH;
+    const kbY  = this._mKbY;
+
+    const logTop = this._mLogTop;
+    const lineH  = this._mLineH;
+
+    if (!show) {
+      for (const t of this.messageTexts) t.visible = true;
+      return;
+    }
+
+    const kbTop = kbY - boxY;   // keyboard top in box-local coords
+    for (const t of this.messageTexts) {
+      const bottom = t.y + lineH;
+      t.visible = bottom <= kbTop - 4;
+    }
   }
 
   // ---------- Screen navigation ----------
@@ -566,6 +850,10 @@ export class ChatRoom extends App {
 
     if (name !== "chat") {
       this._stopTimers();
+      this._chatKeyboardVisible = false;
+      if (this.mobile && this.chatKeyboard) {
+        this.chatKeyboard.visible = false;
+      }
     }
 
     this._refreshUsernameField();
@@ -1304,6 +1592,23 @@ export class ChatRoom extends App {
   }
 
   _renderUsers() {
+    if (this.mobile) {
+      // Slot prefix plus username, clipped to fit the strip.
+      for (let s = 0; s < SLOTS; s++) {
+        const t = this.userTexts[s];
+        const u = this.users.find(x => x.slot === s);
+        if (!u) {
+          t.text = "";
+          continue;
+        }
+        let name = u.username;
+        if (name.length > 6) name = name.slice(0, 6);
+        t.text = s + "." + name;
+        t.color = (u.clientId === this.clientId) ? "#6aa9ff" : "#e08080";
+      }
+      return;
+    }
+
     for (let s = 0; s < SLOTS; s++) {
       const t = this.userTexts[s];
       const u = this.users.find(x => x.slot === s);
@@ -1370,6 +1675,13 @@ export class ChatRoom extends App {
       this.inputText = "";
       this._refreshChatInput();
       this._clearStatus();
+
+      // On mobile, hide the keyboard after a send so the log is
+      // visible again.
+      if (this.mobile && this._chatKeyboardVisible) {
+        this._chatKeyboardVisible = false;
+        this._applyChatKeyboardLayout();
+      }
 
       try {
         await this._sync();
