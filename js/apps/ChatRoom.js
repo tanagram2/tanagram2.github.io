@@ -23,8 +23,12 @@
 // directory chain; an earlier version wrote files to data/data/... and
 // made every room look empty.
 //
-// Presence: one file per room, data/roomN/presence.txt, ten lines.
-// Line N is slot N. Line format:
+// All app data lives under a per-app subfolder of data/, named after
+// the app's .js file. ChatRoom's data root is data/ChatRoom/. Rooms
+// are nested inside it: data/ChatRoom/roomN/...
+//
+// Presence: one file per room, data/ChatRoom/roomN/presence.txt, ten
+// lines. Line N is slot N. Line format:
 //
 //     slotN|username|ISO-timestamp
 //
@@ -95,6 +99,11 @@ import { Viewport }  from "../systems/Viewport.js";
 const OWNER  = "tanagram2";
 const REPO   = "tanagram2.github.io";
 const BRANCH = "main";
+
+// App data root. All paths this app reads or writes are built from
+// this prefix. Matches the app's .js file basename.
+
+const DATA_ROOT = "data/ChatRoom/";
 
 // Tunables.
 
@@ -906,7 +915,7 @@ export class ChatRoom extends App {
 
       const out = {};
       for (const name of ROOMS) {
-        const path  = "data/" + name + "/presence.txt";
+        const path  = DATA_ROOT + name + "/presence.txt";
         const entry = ctx.entries.get(path);
         let content = "";
         if (entry) {
@@ -1015,7 +1024,7 @@ export class ChatRoom extends App {
   // array. content is the raw text (empty string if the file is
   // missing or empty).
   async _readPresenceFromEntries(ctxEntries, room) {
-    const path  = "data/" + room + "/presence.txt";
+    const path  = DATA_ROOT + room + "/presence.txt";
     const entry = ctxEntries.get(path);
     let content = "";
     if (entry) {
@@ -1315,7 +1324,7 @@ export class ChatRoom extends App {
 
         try {
           await this._writeWithRetry(
-            "data/" + room + "/log.txt",
+            DATA_ROOT + room + "/log.txt",
             (cur) => (cur === "" ? null : ""),
             "reset " + room + " log"
           );
@@ -1328,7 +1337,7 @@ export class ChatRoom extends App {
 
         try {
           await this._writeWithRetry(
-            "data/" + room + "/presence.txt",
+            DATA_ROOT + room + "/presence.txt",
             (cur) => (cur === "" ? null : this._serializePresence(new Array(SLOTS).fill(null))),
             "reset " + room + " presence"
           );
@@ -1365,7 +1374,7 @@ export class ChatRoom extends App {
         return;
       }
 
-      const path   = "data/" + room + "/presence.txt";
+      const path   = DATA_ROOT + room + "/presence.txt";
       const myIso  = nowIso();
       const myName = this.username;
       const self   = this;
@@ -1440,7 +1449,7 @@ export class ChatRoom extends App {
       this.room = null;
       this.slot = null;
 
-      const path = "data/" + room + "/presence.txt";
+      const path = DATA_ROOT + room + "/presence.txt";
       const self = this;
       try {
         await this._serialize(() =>
@@ -1520,7 +1529,7 @@ export class ChatRoom extends App {
       // Log read. Skip the blob read if the tree sha for the log has
       // not changed since last cycle.
       let logContent = null;
-      const logEntry = ctx.entries.get("data/" + this.room + "/log.txt");
+      const logEntry = ctx.entries.get(DATA_ROOT + this.room + "/log.txt");
       if (logEntry) {
         if (logEntry.sha !== this._lastLogSha) {
           logContent = await this._readBlob(logEntry.sha);
@@ -1546,7 +1555,7 @@ export class ChatRoom extends App {
       }
 
       // Presence read.
-      const presPath  = "data/" + this.room + "/presence.txt";
+      const presPath  = DATA_ROOT + this.room + "/presence.txt";
       const presEntry = ctx.entries.get(presPath);
       let presContent = "";
       if (presEntry) {
@@ -1730,7 +1739,7 @@ export class ChatRoom extends App {
     const iso  = nowIso();
     const line = this.username + "|" + iso + "|" + safe + "\n";
 
-    const path = "data/" + this.room + "/log.txt";
+    const path = DATA_ROOT + this.room + "/log.txt";
 
     try {
       await this._serialize(() =>
