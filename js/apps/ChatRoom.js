@@ -1,82 +1,72 @@
 // ChatRoom.
 //
-// A client-managed chatroom with no server. Coordination happens
-// through files in a GitHub repository, via the Git Data API
-// (blobs, trees, commits, refs), not the Contents API.
+// Client-managed chatroom with no server. Coordination happens through
+// files in a GitHub repository, via the Git Data API (blobs, trees,
+// commits, refs).
 //
-// Why Git Data and not Contents:
+// Why Git Data and not Contents: the Contents API is served from a
+// cache that is not invalidated promptly after a write, so a read
+// right after a write can return the pre-write version and break a
+// compare-and-swap. Git Data reads the ref and object database
+// directly.
 //
-// The Contents API (GET/PUT /repos/.../contents/PATH) is served from
-// a cache that is not invalidated promptly after a write. A read
-// right after a write can return the pre-write version for long
-// enough to break a compare-and-swap. The Git Data API reads the
-// ref and git object database directly.
+// The ref PATCH is the compare-and-swap. On failure we check whether
+// our commit actually landed; if it did, the write succeeded and we
+// do NOT retry. Otherwise someone else advanced the branch and we
+// rebuild.
 //
-// The ref PATCH is the compare-and-swap. If our PATCH fails, we
-// check whether our commit actually landed (the ref may already
-// point at it). If it did, the write succeeded and we do NOT retry.
-// If it did not, someone else advanced the branch and we rebuild.
+// All git traffic is serialized through one promise chain (_serialize),
+// so a cycle and a manual Update cannot race each other.
 //
-// All git traffic on this client goes through one serialized chain
-// (_serialize). This prevents a cycle and a manual Update from
-// racing each other.
+// Tree writes use ONE POST with the full nested path and base_tree.
+// GitHub resolves intermediate directories. Do NOT hand-roll the
+// directory chain; an earlier version wrote files to data/data/... and
+// made every room look empty.
 //
-// Tree writes use ONE POST with the full nested path. The tree
-// endpoint resolves intermediate directories when base_tree is
-// supplied. Do NOT hand-roll the directory chain - the previous
-// version wrapped the top-level dir twice and wrote files to
-// data/data/roomN/... which made every room look empty.
-//
-// Presence model: one file per room, data/roomN/presence.txt, with
-// exactly ten lines. Line N is slot N, positionally. Each line is:
+// Presence: one file per room, data/roomN/presence.txt, ten lines.
+// Line N is slot N. Line format:
 //
 //     slotN|username|ISO-timestamp
 //
-// A line is "present" if its timestamp is within STALE_MS. The room
-// count is the number of present lines. A room is dead if zero lines
-// are present. A joining client takes the first line that is NOT
-// present as its slot. Leaving writes an ancient timestamp into the
-// client's own line, which the next reader sees as empty.
+// A line is present if its timestamp is within STALE_MS. Room count is
+// the number of present lines. A room is dead if zero lines are
+// present. Join takes the first not-present line. Leave writes an
+// ancient timestamp into the client's own line.
 //
 // Presence writes are text-level splices: read the ten lines, change
-// only your own line, write the whole file back. The other nine
-// lines are passed through byte-for-byte, so nothing another client
-// wrote is ever silently normalized.
+// only your own line, write the whole file back. The other nine lines
+// pass through byte-for-byte.
 //
-// Heartbeat and sync are one cycle now. A cycle reads the tree, the
-// log blob, and the presence blob; updates the message list and the
-// user list; refreshes the client's own presence line; writes the
-// presence file back. There is no separate heartbeat timer.
+// Heartbeat and sync are one cycle. A cycle reads the tree, the log
+// blob, and the presence blob; updates the message and user lists;
+// refreshes the client's own presence line; writes presence back.
 //
 // Decongestion: on a cycle that had to retry at least once before
-// succeeding, the client shifts its next cycle later by a random
-// 500-3000ms. This is one-way drift, so a pack of clients that
-// started in lockstep spreads out and stays spread out. Each client
-// also starts with a random 0-2000ms pre-stagger before its first
-// cycle after joining, so join-time pileups are avoided. A manual
-// Update is exempt from the stagger logic.
+// succeeding, shift the next cycle later by a random 500-3000ms. This
+// is one-way drift, so a pack of clients that started in lockstep
+// spreads out and stays spread out. Each client also starts with a
+// random 0-2000ms pre-stagger before its first cycle. A manual Update
+// is exempt from the stagger logic.
 //
-// A countdown label under the Update button shows the seconds until
-// the next automatic cycle. It reflects the actual scheduled time,
+// A countdown label under the Update button shows seconds until the
+// next automatic cycle. It reflects the actual scheduled time,
 // including any stagger, and resets on manual Update.
 //
-// Screens (all one canvas, toggled via visible):
-//   1. Username   - enters display name (not unique).
+// Screens (one canvas, toggled via visible):
+//   1. Username   - display name (not unique).
 //   2. Room list  - three rooms, occupancy shown as "N/10".
 //   3. Chat       - log + user list + input + Send + Update + Leave.
 //
-// The session value used for Authorization is read from
-// localStorage at init. If it is missing or wrong, the network
-// error paths below surface it. There is no in-app entry screen
-// for it.
+// The session used for Authorization is read from localStorage at
+// init. Missing or wrong values surface through the network error
+// paths. There is no in-app entry screen for it.
 //
-// Desktop layout: wide box, chat log on the left and user list as a
-// right-hand column. Mobile layout: user list becomes a slim
-// horizontal strip at the top of the chat box, log below, input row
-// at the bottom. The chat box on mobile is deliberately shorter than
-// the screen so the on-canvas keyboard has a reserved strip below
-// it. The box height is fixed and does not change when the keyboard
-// toggles.
+// Desktop: wide box, log on the left, user list as a right column.
+// Mobile: user list becomes a slim horizontal strip at the top of the
+// box, log below, input row at the bottom. On mobile the box is
+// deliberately shorter than the screen so the on-canvas keyboard has a
+// reserved strip below it. The box height is fixed and does not change
+// when the keyboard toggles.
 
 import { App }       from "./App.js";
 import { Rect }      from "../primitives/Rect.js";
@@ -87,45 +77,39 @@ import { Label }     from "../composites/Label.js";
 import { Keyboard }  from "../composites/Keyboard.js";
 import { Viewport }  from "../systems/Viewport.js";
 
-// -----------------------------------------------------------------
-// Repo config
-// -----------------------------------------------------------------
+// Repo config.
 
 const OWNER  = "tanagram2";
 const REPO   = "tanagram2.github.io";
 const BRANCH = "main";
 
-// -----------------------------------------------------------------
-// Tunables
-// -----------------------------------------------------------------
+// Tunables.
 
 const ROOMS = ["room1", "room2", "room3"];
 const ROOM_LABELS = { room1: "Room1", room2: "Room2", room3: "Room3" };
 const SLOTS = 10;
 
-const STALE_MS         = 2 * 60 * 1000;  // 2 min: presence freshness
-const CYCLE_MS         = 30 * 1000;      // one cycle every 30s
+const STALE_MS         = 2 * 60 * 1000;  // presence freshness
+const CYCLE_MS         = 30 * 1000;      // automatic cycle interval
 const UPDATE_THROTTLE  = 10 * 1000;      // manual Update cooldown
 const SEND_COOLDOWN    = 15 * 1000;      // min gap between sends
-const PUT_MAX_RETRIES  = 6;              // retries for a conflicted write
-const PUT_BACKOFF_MS   = 250;            // random 0..250 ms between retries
-const DEAD_CONFIRM_MS  = 1000;           // wait between the two dead-room reads
+const PUT_MAX_RETRIES  = 6;              // retries per write
+const PUT_BACKOFF_MS   = 250;            // random backoff ceiling per retry
+const DEAD_CONFIRM_MS  = 1000;           // gap between dead-room reads
 
-const STAGGER_MIN_MS      = 500;         // re-stagger floor
-const STAGGER_MAX_MS      = 3000;        // re-stagger ceiling
-const PRESTAGGER_MAX_MS   = 2000;        // initial delay before first cycle
+const STAGGER_MIN_MS    = 500;
+const STAGGER_MAX_MS    = 3000;
+const PRESTAGGER_MAX_MS = 2000;
 
 const LEAVE_TIMESTAMP = "1970-01-01T00:00:00.000Z";
 
-const CURSOR_MS        = 500;            // blink half-period
+const CURSOR_MS = 500;
 
 const SESSION_KEY = "canvasos.session.id";
 
 const API = "https://api.github.com/repos/" + OWNER + "/" + REPO + "/";
 
-// -----------------------------------------------------------------
-// base64 helpers - the browser's btoa/atob mishandle non-ASCII
-// -----------------------------------------------------------------
+// base64 helpers. The browser's btoa/atob mishandle non-ASCII.
 
 function toBase64(str) {
   const bytes = new TextEncoder().encode(str);
@@ -141,10 +125,6 @@ function fromBase64(b64) {
   for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
   return new TextDecoder().decode(bytes);
 }
-
-// -----------------------------------------------------------------
-// small utils
-// -----------------------------------------------------------------
 
 function randomId() {
   let s = "";
@@ -186,14 +166,13 @@ export class ChatRoom extends App {
     this.room = null;
     this.slot = null;
 
-    this.messages    = [];
-    this.seenKeys    = new Set();
-    this.users       = [];
+    this.messages = [];
+    this.seenKeys = new Set();
+    this.users    = [];
 
-    this._cycleTimer      = null;
-    this._cycleDelay      = CYCLE_MS;
-    this._nextCycleAt     = 0;
-    this._cycleRunning    = false;
+    this._cycleTimer   = null;
+    this._cycleDelay   = CYCLE_MS;
+    this._nextCycleAt  = 0;
 
     this._lastUpdate = 0;
     this._lastSend   = 0;
@@ -231,7 +210,7 @@ export class ChatRoom extends App {
     this._refreshCountdown();
   }
 
-  // ---------- Session persistence ----------
+  // ---------- Session ----------
 
   _loadSession() {
     try {
@@ -259,8 +238,6 @@ export class ChatRoom extends App {
   _refreshUsernameField() { this._renderField(this.usernameFieldLabel, this._usernameBuffer); }
   _refreshChatInput()     { this._renderField(this.inputLabel,         this.inputText); }
 
-  // ---------- Countdown rendering ----------
-
   _refreshCountdown() {
     if (!this.cycleCountdownLabel) return;
 
@@ -269,7 +246,7 @@ export class ChatRoom extends App {
       return;
     }
 
-    const remainMs = this._nextCycleAt - Date.now();
+    const remainMs  = this._nextCycleAt - Date.now();
     const remainSec = remainMs > 0 ? Math.ceil(remainMs / 1000) : 0;
     this.cycleCountdownLabel.text = "auto: " + remainSec + "s";
   }
@@ -298,7 +275,6 @@ export class ChatRoom extends App {
     }));
 
     const cx = W / 2;
-
     const titleY = this.mobile ? 140 : 200;
 
     screen.add(new Text({
@@ -361,11 +337,11 @@ export class ChatRoom extends App {
       });
       screen.add(this.usernameKeyboard);
 
-      const kbH   = this.usernameKeyboard.h;
-      const btnW  = kbW;
-      const btnH  = 72;
-      const btnX  = kbX;
-      const btnY  = kbY + kbH + 20;
+      const kbH  = this.usernameKeyboard.h;
+      const btnW = kbW;
+      const btnH = 72;
+      const btnX = kbX;
+      const btnY = kbY + kbH + 20;
 
       screen.add(new Button({
         x: btnX, y: btnY, w: btnW, h: btnH,
@@ -469,7 +445,6 @@ export class ChatRoom extends App {
 
   _buildChatScreen() {
     const W = Viewport.width;
-    const H = Viewport.height;
 
     const screen = new Panel({
       x: 0, y: 0, w: "100%", h: "100%",
@@ -499,7 +474,6 @@ export class ChatRoom extends App {
       onClick: () => this._manualUpdate(),
     }));
 
-    // Countdown to the next automatic cycle, centered under Update.
     this.cycleCountdownLabel = new Text({
       x: W - 164 + 70,
       y: 24 + 48 + 16,
@@ -551,7 +525,7 @@ export class ChatRoom extends App {
     const boxX = (W - boxW) / 2;
     const boxY = 110;
 
-    const userColW = 220;
+    const userColW  = 220;
     const inputRowH = 64;
 
     this._maxLines = Math.floor((boxH - inputRowH - 20) / 22);
@@ -651,7 +625,7 @@ export class ChatRoom extends App {
       onClick: () => this._sendMessage(),
     }));
 
-    this.chatKeyboard = null;
+    this.chatKeyboard   = null;
     this.chatTypeToggle = null;
   }
 
@@ -674,25 +648,24 @@ export class ChatRoom extends App {
     });
     const kbH = this.chatKeyboard.h;
 
-    const gapAboveKb = 16;
+    const gapAboveKb     = 16;
     const kbBottomMargin = 20;
 
     const boxH = H - boxY - kbH - gapAboveKb - kbBottomMargin;
 
     const userStripH = 44;
     const inputRowH  = 80;
+    const logH       = boxH - userStripH - inputRowH;
 
-    const logH = boxH - userStripH - inputRowH;
-
-    this._mBoxX         = boxX;
-    this._mBoxY         = boxY;
-    this._mBoxW         = boxW;
-    this._mBoxH         = boxH;
-    this._mUserStripH   = userStripH;
-    this._mInputRowH    = inputRowH;
-    this._mKbX          = kbX;
-    this._mKbW          = kbW;
-    this._mLogH         = logH;
+    this._mBoxX       = boxX;
+    this._mBoxY       = boxY;
+    this._mBoxW       = boxW;
+    this._mBoxH       = boxH;
+    this._mUserStripH = userStripH;
+    this._mInputRowH  = inputRowH;
+    this._mKbX        = kbX;
+    this._mKbW        = kbW;
+    this._mLogH       = logH;
 
     const box = new Panel({
       x: boxX, y: boxY, w: boxW, h: boxH,
@@ -719,13 +692,12 @@ export class ChatRoom extends App {
     }));
 
     this.userTexts = [];
-    const slotFont = "14px monospace";
     for (let s = 0; s < SLOTS; s++) {
       const t = new Text({
         x: 10 + s * 68,
         y: userStripH / 2,
         text: "",
-        font: slotFont,
+        font: "14px monospace",
         color: "#7a8a9a",
         align: "left",
         baseline: "middle",
@@ -738,9 +710,9 @@ export class ChatRoom extends App {
     const lineH  = 20;
     const linesFit = Math.max(1, Math.floor((logH - 16) / lineH));
 
-    this._maxLines     = linesFit;
-    this._mLogTop      = logTop;
-    this._mLineH       = lineH;
+    this._maxLines = linesFit;
+    this._mLogTop  = logTop;
+    this._mLineH   = lineH;
 
     this.messageTexts = [];
     for (let i = 0; i < linesFit; i++) {
@@ -759,10 +731,10 @@ export class ChatRoom extends App {
     const inputY = boxH - inputRowH + 10;
     const inputH = inputRowH - 20;
 
-    const btnW = 90;
+    const btnW   = 90;
     const btnGap = 8;
-    const sendX = boxW - 12 - btnW;
-    const typeX = sendX - btnGap - btnW;
+    const sendX  = boxW - 12 - btnW;
+    const typeX  = sendX - btnGap - btnW;
 
     const inputX = 12;
     const inputW = typeX - btnGap - inputX;
@@ -887,7 +859,23 @@ export class ChatRoom extends App {
     this._applyScreen(this.stack[this.stack.length - 1]);
   }
 
-  // ---------- Room occupancy on the Room Select screen ----------
+  // ---------- Status line ----------
+
+  _setStatus(msg) {
+    const top = this.stack[this.stack.length - 1];
+    const text = msg || "";
+    if (top === "chat" && this.statusLabel) {
+      this.statusLabel.text = text;
+    } else if (this.roomStatusLabel) {
+      this.roomStatusLabel.text = text;
+    }
+  }
+
+  _clearStatus() {
+    this._setStatus("");
+  }
+
+  // ---------- Room occupancy ----------
 
   async _refreshRoomOccupancy() {
     for (const name of ROOMS) {
@@ -915,7 +903,7 @@ export class ChatRoom extends App {
 
       const out = {};
       for (const name of ROOMS) {
-        const path = "data/" + name + "/presence.txt";
+        const path  = "data/" + name + "/presence.txt";
         const entry = this._treeCache.entries.get(path);
         let content = "";
         if (entry) {
@@ -949,22 +937,8 @@ export class ChatRoom extends App {
     return s.replace(/\|/g, "").replace(/\n/g, "").replace(/\r/g, "").trim();
   }
 
-  _setStatus(msg) {
-    const top = this.stack[this.stack.length - 1];
-    const text = msg || "";
-    if (top === "chat" && this.statusLabel) {
-      this.statusLabel.text = text;
-    } else if (this.roomStatusLabel) {
-      this.roomStatusLabel.text = text;
-    }
-  }
-
-  _clearStatus() {
-    this._setStatus("");
-  }
-
   // =================================================================
-  // GIT DATA API PRIMITIVES
+  // Git Data API primitives.
   // =================================================================
 
   _authHeaders() {
@@ -1035,16 +1009,6 @@ export class ChatRoom extends App {
     this._treeCache = null;
   }
 
-  async _readFile(path) {
-    if (!this._treeCache) {
-      await this._refreshTreeCache();
-    }
-    const entry = this._treeCache.entries.get(path);
-    if (!entry) return null;
-    const content = await this._readBlob(entry.sha);
-    return { content, sha: entry.sha, commitSha: this._treeCache.commitSha };
-  }
-
   async _createBlob(content) {
     const url = API + "git/blobs";
     const res = await fetch(url, {
@@ -1059,7 +1023,7 @@ export class ChatRoom extends App {
   }
 
   async _postTree(entries, baseTreeSha) {
-    const url = API + "git/trees";
+    const url  = API + "git/trees";
     const body = { tree: entries };
     if (baseTreeSha) body.base_tree = baseTreeSha;
 
@@ -1084,12 +1048,9 @@ export class ChatRoom extends App {
   }
 
   async _createCommit(treeSha, parentCommitSha, message) {
-    const url = API + "git/commits";
-    const body = {
-      message,
-      tree: treeSha,
-      parents: [parentCommitSha],
-    };
+    const url  = API + "git/commits";
+    const body = { message, tree: treeSha, parents: [parentCommitSha] };
+
     const res = await fetch(url, {
       method: "POST",
       headers: this._jsonHeaders(),
@@ -1113,9 +1074,12 @@ export class ChatRoom extends App {
     if (!res.ok) throw new Error("PATCH_REF_FAILED_" + res.status);
   }
 
+  // Returns { ok, retried }. ok is true when the write landed. retried
+  // is true if at least one attempt had to loop. The cycle scheduler
+  // uses retried to decide whether to nudge itself later.
   async _writeWithRetry(path, buildContent, message) {
     let lastError = null;
-    let retried = false;
+    let retried   = false;
 
     for (let attempt = 0; attempt < PUT_MAX_RETRIES; attempt++) {
       if (attempt > 0) retried = true;
@@ -1147,12 +1111,7 @@ export class ChatRoom extends App {
         }
       }
 
-      let toWrite;
-      try {
-        toWrite = buildContent(currentContent);
-      } catch (e) {
-        throw e;
-      }
+      const toWrite = buildContent(currentContent);
       if (toWrite === null) {
         return { ok: false, retried };
       }
@@ -1218,10 +1177,8 @@ export class ChatRoom extends App {
   }
 
   // =================================================================
-  // END GIT DATA API PRIMITIVES
+  // Presence parsing and splicing.
   // =================================================================
-
-  // ---------- Presence parsing and splicing ----------
 
   _parsePresence(content) {
     const lines = content ? content.split("\n") : [];
@@ -1362,10 +1319,10 @@ export class ChatRoom extends App {
         return;
       }
 
-      const path = "data/" + room + "/presence.txt";
-      const myIso = nowIso();
+      const path   = "data/" + room + "/presence.txt";
+      const myIso  = nowIso();
       const myName = this.username;
-      const self = this;
+      const self   = this;
 
       let claimResult;
       try {
@@ -1389,11 +1346,11 @@ export class ChatRoom extends App {
         return;
       }
 
-      this.room = room;
-      this.slot = slot;
+      this.room     = room;
+      this.slot     = slot;
       this.messages = [];
       this.seenKeys = new Set();
-      this.users = [];
+      this.users    = [];
 
       this.roomTitleLabel.text = ROOM_LABELS[room];
       this.inputText = "";
@@ -1451,8 +1408,8 @@ export class ChatRoom extends App {
 
   _startCycle() {
     this._stopCycle();
-    this._cycleDelay = CYCLE_MS;
-    const initial = Math.floor(Math.random() * PRESTAGGER_MAX_MS);
+    this._cycleDelay  = CYCLE_MS;
+    const initial     = Math.floor(Math.random() * PRESTAGGER_MAX_MS);
     this._nextCycleAt = Date.now() + initial;
     this._refreshCountdown();
     this._cycleTimer = setTimeout(() => this._runCycleLoop(), initial);
@@ -1470,8 +1427,8 @@ export class ChatRoom extends App {
   async _runCycleLoop() {
     if (this.room === null) return;
 
-    // The timer just fired, so we are no longer scheduled. Freeze
-    // the countdown at 0 until we reschedule after the cycle.
+    // Timer just fired. Freeze countdown at 0 until the cycle finishes
+    // and we reschedule.
     this._nextCycleAt = 0;
     this._refreshCountdown();
 
@@ -1483,7 +1440,6 @@ export class ChatRoom extends App {
         this._handleApiError(e, "cycle");
         return;
       }
-      // Non-fatal. The next cycle will try again.
     }
 
     if (retried) {
@@ -1541,7 +1497,7 @@ export class ChatRoom extends App {
       this._renderMessages();
       this._renderUsers();
 
-      const path = "data/" + this.room + "/presence.txt";
+      const path   = "data/" + this.room + "/presence.txt";
       const mySlot = this.slot;
       const myName = this.username;
       const myIso  = nowIso();
@@ -1559,14 +1515,14 @@ export class ChatRoom extends App {
         if (result.retried) retried = true;
       } catch (e) {
         if (e && e.message === "BAD_SESSION") throw e;
-        // Best-effort. Swallow.
+        // Best-effort.
       }
     });
 
     return retried;
   }
 
-  // ---------- Sync (called by manual Update) ----------
+  // ---------- Manual Update ----------
 
   async _manualUpdate() {
     if (this._updating) return;
@@ -1579,16 +1535,12 @@ export class ChatRoom extends App {
       return;
     }
 
-    this._updating = true;
-    this._lastUpdate = now;
+    this._updating    = true;
+    this._lastUpdate  = now;
     this._setStatus("Updating...");
 
-    // Manual Update reschedules the next automatic cycle from now,
-    // since a cycle is about to run. Cancel any pending timer so it
-    // does not fire on top of the manual cycle. The delay is reset to
-    // CYCLE_MS; manual Update is exempt from the stagger logic, but
-    // the client's accumulated _cycleDelay (if any) is preserved so
-    // the drift already earned is not lost.
+    // Cancel the pending automatic cycle. Manual Update is exempt from
+    // the stagger logic, but the accumulated _cycleDelay is preserved.
     if (this._cycleTimer) {
       clearTimeout(this._cycleTimer);
       this._cycleTimer = null;
@@ -1601,7 +1553,6 @@ export class ChatRoom extends App {
     } catch (e) {
       this._handleApiError(e, "update");
       this._updating = false;
-      // Reschedule even on failure so the client keeps cycling.
       if (this.room !== null) {
         this._nextCycleAt = Date.now() + this._cycleDelay;
         this._refreshCountdown();
@@ -1620,6 +1571,8 @@ export class ChatRoom extends App {
     }
   }
 
+  // ---------- Message rendering ----------
+
   _parseMessageLine(line) {
     const first = line.indexOf("|");
     if (first < 0) return null;
@@ -1633,7 +1586,7 @@ export class ChatRoom extends App {
   }
 
   _renderMessages() {
-    const n = this.messages.length;
+    const n     = this.messages.length;
     const start = Math.max(0, n - this._maxLines);
     const slice = this.messages.slice(start);
 
@@ -1641,11 +1594,11 @@ export class ChatRoom extends App {
       const t = this.messageTexts[i];
       const m = slice[i];
       if (!m) {
-        t.text = "";
+        t.text  = "";
         t.color = "#d8e4f7";
         continue;
       }
-      t.text = "[" + hhmm(m.iso) + "] " + m.username + ": " + m.text;
+      t.text  = "[" + hhmm(m.iso) + "] " + m.username + ": " + m.text;
       t.color = (m.username === this.username) ? "#6aa9ff" : "#d8e4f7";
     }
   }
@@ -1661,7 +1614,7 @@ export class ChatRoom extends App {
         }
         let name = u.username;
         if (name.length > 6) name = name.slice(0, 6);
-        t.text = s + "." + name;
+        t.text  = s + "." + name;
         t.color = (u.username === this.username) ? "#6aa9ff" : "#e08080";
       }
       return;
@@ -1675,7 +1628,7 @@ export class ChatRoom extends App {
         continue;
       }
       const pad = String(s) + ".";
-      t.text = pad + " " + u.username;
+      t.text  = pad + " " + u.username;
       t.color = (u.username === this.username) ? "#6aa9ff" : "#e08080";
     }
   }
@@ -1684,7 +1637,6 @@ export class ChatRoom extends App {
 
   async _sendMessage() {
     if (this.room === null || this.slot === null) return;
-
     if (this._sending) return;
 
     const text = this.inputText.trim();
@@ -1698,7 +1650,7 @@ export class ChatRoom extends App {
       return;
     }
 
-    this._sending = true;
+    this._sending  = true;
     this._lastSend = now;
 
     const safe = text.replace(/\|/g, "/").replace(/\n/g, " ").replace(/\r/g, " ");
