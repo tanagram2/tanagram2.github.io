@@ -1,7 +1,7 @@
 #META
 started=1
-turn=1
-turnCount=1
+turn=0
+turnCount=2
 winner=-1
 firstMode=coin
 #PLAYER 0
@@ -11,4 +11,4 @@ shots=
 #PLAYER 1
 name=motivator
 fleet=8,1:8,2:8,3:8,4:8,5;1,5:1,6:1,7:1,8;4,7:5,7:6,7;3,3:4,3:5,3;1,1:2,1
-shots=
+shots=7,2,0
