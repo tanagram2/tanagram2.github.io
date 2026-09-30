@@ -17,6 +17,7 @@ import { TimeClock }  from "./TimeClock.js";
 import { SnakeGame }  from "./SnakeGame.js";
 import { Tetris }     from "./Tetris.js";
 import { ChatRoom }   from "./ChatRoom.js";
+import { ChatRoom }   from "./Battleship.js";
 
 export const APPS = [
   Calculator,
@@ -24,4 +25,5 @@ export const APPS = [
   SnakeGame,
   Tetris,
   ChatRoom,
+  Battleship,
 ];
