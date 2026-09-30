@@ -18,7 +18,7 @@
 // If it did not, someone else advanced the branch and we rebuild.
 //
 // All git traffic on this client goes through one serialized chain
-// (_serialize). This prevents the heartbeat and the sync from
+// (_serialize). This prevents a cycle and a manual Update from
 // racing each other.
 //
 // Tree writes use ONE POST with the full nested path. The tree
@@ -27,26 +27,42 @@
 // version wrapped the top-level dir twice and wrote files to
 // data/data/roomN/... which made every room look empty.
 //
-// Presence model: one file per slot, data/roomN/presence/slotM.txt.
-// A slot is "occupied" if its content is non-empty and its
-// timestamp is within OCCUPIED_MS (2 * STALE_MS, so a single late
-// heartbeat does not make a live client look gone). "Fresh" is the
-// stricter STALE_MS used for display. A room is "dead" if no slot
-// is occupied.
+// Presence model: one file per room, data/roomN/presence.txt, with
+// exactly ten lines. Line N is slot N, positionally. Each line is:
 //
-// Dead-room detection is two-phase: read presence, and if no slot
-// is occupied, wait 1s and read again. Only if the second read also
-// shows no occupied slot do we reset.
+//     slotN|username|ISO-timestamp
 //
-// Reset wipes the log and all presence files, then claims slot 0.
+// A line is "present" if its timestamp is within STALE_MS. The room
+// count is the number of present lines. A room is dead if zero lines
+// are present. A joining client takes the first line that is NOT
+// present as its slot. Leaving writes an ancient timestamp into the
+// client's own line, which the next reader sees as empty.
 //
-// Heartbeat self-heal: if the heartbeat finds its own slot empty
-// (not occupied by someone else), it re-claims rather than leaving.
-// Eviction only fires when the slot holds ANOTHER client's content.
+// Presence writes are text-level splices: read the ten lines, change
+// only your own line, write the whole file back. The other nine
+// lines are passed through byte-for-byte, so nothing another client
+// wrote is ever silently normalized.
+//
+// Heartbeat and sync are one cycle now. A cycle reads the tree, the
+// log blob, and the presence blob; updates the message list and the
+// user list; refreshes the client's own presence line; writes the
+// presence file back. There is no separate heartbeat timer.
+//
+// Decongestion: on a cycle that had to retry at least once before
+// succeeding, the client shifts its next cycle later by a random
+// 500-3000ms. This is one-way drift, so a pack of clients that
+// started in lockstep spreads out and stays spread out. Each client
+// also starts with a random 0-2000ms pre-stagger before its first
+// cycle after joining, so join-time pileups are avoided. A manual
+// Update is exempt from the stagger logic.
+//
+// A countdown label under the Update button shows the seconds until
+// the next automatic cycle. It reflects the actual scheduled time,
+// including any stagger, and resets on manual Update.
 //
 // Screens (all one canvas, toggled via visible):
 //   1. Username   - enters display name (not unique).
-//   2. Room list  - three rooms, occupancy shown as "?".
+//   2. Room list  - three rooms, occupancy shown as "N/10".
 //   3. Chat       - log + user list + input + Send + Update + Leave.
 //
 // The session value used for Authorization is read from
@@ -87,15 +103,19 @@ const ROOMS = ["room1", "room2", "room3"];
 const ROOM_LABELS = { room1: "Room1", room2: "Room2", room3: "Room3" };
 const SLOTS = 10;
 
-const STALE_MS         = 2 * 60 * 1000;  // 2 min: heartbeat freshness for display
-const OCCUPIED_MS      = 4 * 60 * 1000;  // 4 min: join-time "is someone here"
-const HEARTBEAT_MS     = 30 * 1000;      // every 30s
-const SYNC_MS          = 60 * 1000;      // periodic sync
+const STALE_MS         = 2 * 60 * 1000;  // 2 min: presence freshness
+const CYCLE_MS         = 30 * 1000;      // one cycle every 30s
 const UPDATE_THROTTLE  = 10 * 1000;      // manual Update cooldown
 const SEND_COOLDOWN    = 15 * 1000;      // min gap between sends
 const PUT_MAX_RETRIES  = 6;              // retries for a conflicted write
 const PUT_BACKOFF_MS   = 250;            // random 0..250 ms between retries
 const DEAD_CONFIRM_MS  = 1000;           // wait between the two dead-room reads
+
+const STAGGER_MIN_MS      = 500;         // re-stagger floor
+const STAGGER_MAX_MS      = 3000;        // re-stagger ceiling
+const PRESTAGGER_MAX_MS   = 2000;        // initial delay before first cycle
+
+const LEAVE_TIMESTAMP = "1970-01-01T00:00:00.000Z";
 
 const CURSOR_MS        = 500;            // blink half-period
 
@@ -137,18 +157,11 @@ function nowIso() {
   return new Date().toISOString();
 }
 
-function isFresh(isoStr) {
+function isPresent(isoStr) {
   if (!isoStr) return false;
   const t = Date.parse(isoStr);
   if (Number.isNaN(t)) return false;
   return (Date.now() - t) < STALE_MS;
-}
-
-function isOccupied(isoStr) {
-  if (!isoStr) return false;
-  const t = Date.parse(isoStr);
-  if (Number.isNaN(t)) return false;
-  return (Date.now() - t) < OCCUPIED_MS;
 }
 
 function hhmm(isoStr) {
@@ -170,22 +183,21 @@ export class ChatRoom extends App {
 
     this.clientId = randomId();
 
-    this.room     = null;
-    this.slot     = null;
+    this.room = null;
+    this.slot = null;
 
     this.messages    = [];
     this.seenKeys    = new Set();
     this.users       = [];
 
-    this._syncTimer       = null;
-    this._heartbeatTimer  = null;
-    this._lastHeartbeatAt = 0;
+    this._cycleTimer      = null;
+    this._cycleDelay      = CYCLE_MS;
+    this._nextCycleAt     = 0;
+    this._cycleRunning    = false;
 
     this._lastUpdate = 0;
     this._lastSend   = 0;
 
-    // In-flight guards. Prevents a double-tap on Send or Update from
-    // firing two overlapping operations. Cleared in finally blocks.
     this._sending  = false;
     this._updating = false;
 
@@ -195,7 +207,6 @@ export class ChatRoom extends App {
     this._usernameBuffer = "";
     this.inputText       = "";
 
-    // Mobile chat-screen keyboard visibility.
     this._chatKeyboardVisible = false;
 
     this._joining = false;
@@ -217,6 +228,7 @@ export class ChatRoom extends App {
     this._applyScreen("username");
     this._refreshUsernameField();
     this._refreshChatInput();
+    this._refreshCountdown();
   }
 
   // ---------- Session persistence ----------
@@ -246,6 +258,21 @@ export class ChatRoom extends App {
 
   _refreshUsernameField() { this._renderField(this.usernameFieldLabel, this._usernameBuffer); }
   _refreshChatInput()     { this._renderField(this.inputLabel,         this.inputText); }
+
+  // ---------- Countdown rendering ----------
+
+  _refreshCountdown() {
+    if (!this.cycleCountdownLabel) return;
+
+    if (this.room === null || !this._nextCycleAt) {
+      this.cycleCountdownLabel.text = "";
+      return;
+    }
+
+    const remainMs = this._nextCycleAt - Date.now();
+    const remainSec = remainMs > 0 ? Math.ceil(remainMs / 1000) : 0;
+    this.cycleCountdownLabel.text = "auto: " + remainSec + "s";
+  }
 
   // ---------- Screens ----------
 
@@ -322,7 +349,6 @@ export class ChatRoom extends App {
     screen.add(this.usernameErrorLabel);
 
     if (this.mobile) {
-      // Keyboard always visible on mobile. Enter button sits below.
       const kbMargin = 40;
       const kbW      = W - kbMargin * 2;
       const kbX      = kbMargin;
@@ -451,7 +477,6 @@ export class ChatRoom extends App {
       stroke: null,
     });
 
-    // Top bar: Leave on the left, Update on the right.
     screen.add(new Button({
       x: 24, y: 24, w: 140, h: 48,
       text: "Leave",
@@ -473,6 +498,18 @@ export class ChatRoom extends App {
       textOptions: { font: "bold 18px sans-serif", color: "#ffffff" },
       onClick: () => this._manualUpdate(),
     }));
+
+    // Countdown to the next automatic cycle, centered under Update.
+    this.cycleCountdownLabel = new Text({
+      x: W - 164 + 70,
+      y: 24 + 48 + 16,
+      text: "",
+      font: "14px monospace",
+      color: "#5f7a95",
+      align: "center",
+      baseline: "middle",
+    });
+    screen.add(this.cycleCountdownLabel);
 
     this.roomTitleLabel = new Text({
       x: W / 2,
@@ -622,16 +659,6 @@ export class ChatRoom extends App {
     const W = Viewport.width;
     const H = Viewport.height;
 
-    // The chat box top stays fixed. The chat box bottom is raised
-    // so that a full on-canvas keyboard fits below it, fully
-    // on-screen. The box height does NOT change when the keyboard is
-    // toggled: the strip below the box is always reserved.
-    //
-    // Order of computation:
-    //   1. Build the keyboard first so we know its height.
-    //   2. Reserve space below the box equal to keyboard height plus
-    //      a top gap (between box and keyboard) and a bottom margin.
-    //   3. Size the box to what remains.
     const boxX = 20;
     const boxY = 130;
     const boxW = W - 40;
@@ -640,8 +667,6 @@ export class ChatRoom extends App {
     const kbW      = W - kbMargin * 2;
     const kbX      = kbMargin;
 
-    // Build the keyboard unpositioned so we can read its .h. Its y
-    // is set below, once we know the box height.
     this.chatKeyboard = new Keyboard({
       x: kbX, y: 0,
       w: kbW,
@@ -679,7 +704,6 @@ export class ChatRoom extends App {
     screen.add(box);
     this._mBox = box;
 
-    // Separator under the user strip.
     box.add(new Rect({
       x: 0, y: userStripH - 1,
       w: boxW, h: 2,
@@ -687,7 +711,6 @@ export class ChatRoom extends App {
       stroke: null,
     }));
 
-    // Separator above the input row.
     box.add(new Rect({
       x: 0, y: boxH - inputRowH - 1,
       w: boxW, h: 2,
@@ -695,7 +718,6 @@ export class ChatRoom extends App {
       stroke: null,
     }));
 
-    // User strip: one Text per slot, laid out horizontally.
     this.userTexts = [];
     const slotFont = "14px monospace";
     for (let s = 0; s < SLOTS; s++) {
@@ -712,8 +734,6 @@ export class ChatRoom extends App {
       this.userTexts.push(t);
     }
 
-    // Log area. Text nodes are positioned relative to the box, with
-    // the strip offset baked in via y.
     const logTop = userStripH + 8;
     const lineH  = 20;
     const linesFit = Math.max(1, Math.floor((logH - 16) / lineH));
@@ -736,8 +756,6 @@ export class ChatRoom extends App {
       this.messageTexts.push(t);
     }
 
-    // Input row: input panel on the left, Type and Send buttons on
-    // the right.
     const inputY = boxH - inputRowH + 10;
     const inputH = inputRowH - 20;
 
@@ -798,7 +816,6 @@ export class ChatRoom extends App {
       onClick: () => this._sendMessage(),
     }));
 
-    // The keyboard lives in the reserved strip below the box.
     const kbY = boxY + boxH + gapAboveKb;
     this.chatKeyboard.x = kbX;
     this.chatKeyboard.y = kbY;
@@ -808,9 +825,6 @@ export class ChatRoom extends App {
     this._mKbY = kbY;
   }
 
-  // Show or hide the on-canvas keyboard on the mobile chat screen.
-  // The box does not move: the strip below the box is always
-  // reserved. Toggling the keyboard only changes its own visibility.
   _toggleChatKeyboard() {
     this._chatKeyboardVisible = !this._chatKeyboardVisible;
     this._applyChatKeyboardLayout();
@@ -837,7 +851,7 @@ export class ChatRoom extends App {
     this._cursorTimer = 0;
 
     if (name !== "chat") {
-      this._stopTimers();
+      this._stopCycle();
       this._chatKeyboardVisible = false;
       if (this.mobile && this.chatKeyboard) {
         this.chatKeyboard.visible = false;
@@ -846,6 +860,7 @@ export class ChatRoom extends App {
 
     this._refreshUsernameField();
     this._refreshChatInput();
+    this._refreshCountdown();
 
     if (name !== "room" && this.roomStatusLabel) {
       this.roomStatusLabel.text = "";
@@ -856,7 +871,7 @@ export class ChatRoom extends App {
     this.stack.push(name);
     this._applyScreen(name);
 
-    if (name === "room") this._refreshRoomOccupancyPlaceholders();
+    if (name === "room") this._refreshRoomOccupancy();
   }
 
   _goBack() {
@@ -872,37 +887,66 @@ export class ChatRoom extends App {
     this._applyScreen(this.stack[this.stack.length - 1]);
   }
 
-  _refreshRoomOccupancyPlaceholders() {
+  // ---------- Room occupancy on the Room Select screen ----------
+
+  async _refreshRoomOccupancy() {
     for (const name of ROOMS) {
       this.roomButtons[name].setText(ROOM_LABELS[name] + "  ?/10");
     }
-  }
 
-  _setStatus(msg) {
-    const top = this.stack[this.stack.length - 1];
-    const text = msg || "";
-    if (top === "chat" && this.statusLabel) {
-      this.statusLabel.text = text;
-    } else if (this.roomStatusLabel) {
-      this.roomStatusLabel.text = text;
+    let counts;
+    try {
+      counts = await this._readAllRoomCounts();
+    } catch (e) {
+      this._setStatus("Could not read room occupancy.");
+      return;
+    }
+
+    for (const name of ROOMS) {
+      const c = counts[name] || 0;
+      this.roomButtons[name].setText(ROOM_LABELS[name] + "  " + c + "/10");
     }
   }
 
-  _clearStatus() {
-    this._setStatus("");
+  async _readAllRoomCounts() {
+    return await this._serialize(async () => {
+      this._clearTreeCache();
+      await this._refreshTreeCache();
+
+      const out = {};
+      for (const name of ROOMS) {
+        const path = "data/" + name + "/presence.txt";
+        const entry = this._treeCache.entries.get(path);
+        let content = "";
+        if (entry) {
+          content = await this._readBlob(entry.sha);
+        }
+        out[name] = this._countPresent(content);
+      }
+      return out;
+    });
   }
 
   // ---------- Username submit ----------
 
   _submitUsername() {
-    const name = this._usernameBuffer.trim();
-    if (!name) {
+    const raw = this._usernameBuffer.trim();
+    if (!raw) {
       this.usernameErrorLabel.text = "Username required.";
+      return;
+    }
+    const name = this._sanitizeUsername(raw);
+    if (!name) {
+      this.usernameErrorLabel.text = "Username must contain letters or digits.";
       return;
     }
     this.usernameErrorLabel.text = "";
     this.username = name;
     this._pushScreen("room");
+  }
+
+  _sanitizeUsername(s) {
+    return s.replace(/\|/g, "").replace(/\n/g, "").replace(/\r/g, "").trim();
   }
 
   // =================================================================
@@ -1016,8 +1060,6 @@ export class ChatRoom extends App {
     return json.sha;
   }
 
-  // Single POST. GitHub resolves intermediate directories from the
-  // supplied full path when base_tree is present.
   async _createTreeWithChange(baseTreeSha, path, blobSha) {
     return await this._postTree([{
       path: path,
@@ -1059,8 +1101,11 @@ export class ChatRoom extends App {
 
   async _writeWithRetry(path, buildContent, message) {
     let lastError = null;
+    let retried = false;
 
     for (let attempt = 0; attempt < PUT_MAX_RETRIES; attempt++) {
+      if (attempt > 0) retried = true;
+
       let currentCommitSha;
       let treeSha;
       let entries;
@@ -1095,7 +1140,7 @@ export class ChatRoom extends App {
         throw e;
       }
       if (toWrite === null) {
-        return false;
+        return { ok: false, retried };
       }
 
       let newBlobSha;
@@ -1124,7 +1169,7 @@ export class ChatRoom extends App {
 
       if (verifyRef === newCommitSha) {
         this._clearTreeCache();
-        return true;
+        return { ok: true, retried };
       }
 
       if (verifyRef !== currentCommitSha) {
@@ -1141,7 +1186,7 @@ export class ChatRoom extends App {
           const postRef = await this._readRef();
           if (postRef === newCommitSha) {
             this._clearTreeCache();
-            return true;
+            return { ok: true, retried };
           }
         } catch (e2) {
           if (e2.message === "BAD_SESSION") throw e2;
@@ -1152,7 +1197,7 @@ export class ChatRoom extends App {
       }
 
       this._clearTreeCache();
-      return true;
+      return { ok: true, retried };
     }
 
     throw lastError || new Error("WRITE_RETRIES_EXHAUSTED");
@@ -1162,47 +1207,64 @@ export class ChatRoom extends App {
   // END GIT DATA API PRIMITIVES
   // =================================================================
 
-  // ---------- Presence helpers ----------
+  // ---------- Presence parsing and splicing ----------
 
-  async _readPresence(room) {
-    return await this._serialize(async () => {
-      this._clearTreeCache();
+  _parsePresence(content) {
+    const lines = content ? content.split("\n") : [];
+    const out = [];
+    for (let i = 0; i < SLOTS; i++) {
+      const line = lines[i] !== undefined ? lines[i] : "";
+      if (!line.trim()) { out.push(null); continue; }
+      const parts = line.split("|");
+      if (parts.length < 3) { out.push(null); continue; }
+      const slotStr  = parts[0];
+      const username = parts[1];
+      const iso      = parts[2];
+      const slotNum  = parseInt(slotStr.replace(/^slot/, ""), 10);
+      if (Number.isNaN(slotNum) || slotNum !== i) { out.push(null); continue; }
+      if (!username || !iso) { out.push(null); continue; }
+      out.push({ slot: i, username, iso });
+    }
+    return out;
+  }
+
+  _serializePresence(entries) {
+    const out = [];
+    for (let i = 0; i < SLOTS; i++) {
+      const e = entries[i];
+      if (!e) { out.push(""); continue; }
+      out.push("slot" + i + "|" + e.username + "|" + e.iso);
+    }
+    return out.join("\n");
+  }
+
+  _splicePresenceLine(content, slotIndex, newLine) {
+    const lines = content ? content.split("\n") : [];
+    while (lines.length <= slotIndex) lines.push("");
+    lines[slotIndex] = newLine;
+    return lines.join("\n");
+  }
+
+  _countPresent(content) {
+    const entries = this._parsePresence(content);
+    let n = 0;
+    for (const e of entries) {
+      if (e && isPresent(e.iso)) n++;
+    }
+    return n;
+  }
+
+  async _readPresenceContent(room) {
+    const path = "data/" + room + "/presence.txt";
+    if (!this._treeCache) {
       await this._refreshTreeCache();
-
-      const out = [];
-      for (let s = 0; s < SLOTS; s++) {
-        const path = "data/" + room + "/presence/slot" + s + ".txt";
-        let rec = null;
-        try {
-          const entry = this._treeCache.entries.get(path);
-          if (entry) {
-            const content = await this._readBlob(entry.sha);
-            if (content) {
-              const parsed = this._parseSlot(content);
-              if (parsed) rec = parsed;
-            }
-          }
-        } catch (e) {
-          if (e.message === "BAD_SESSION") throw e;
-        }
-        out.push(rec);
-      }
-      return out;
-    });
-  }
-
-  _parseSlot(content) {
-    const parts = content.split("\n");
-    if (parts.length < 3) return null;
-    const clientId = parts[0].trim();
-    const username = parts[1].trim();
-    const iso      = parts[2].trim();
-    if (!clientId || !iso) return null;
-    return { clientId, username, iso };
-  }
-
-  _serializeSlot(clientId, username, iso) {
-    return clientId + "\n" + username + "\n" + iso + "\n";
+    }
+    const entry = this._treeCache.entries.get(path);
+    let content = "";
+    if (entry) {
+      content = await this._readBlob(entry.sha);
+    }
+    return { content, entries: this._parsePresence(content) };
   }
 
   // ---------- Room join ----------
@@ -1214,28 +1276,36 @@ export class ChatRoom extends App {
     this._setStatus("Joining " + ROOM_LABELS[room] + "...");
 
     try {
-      let presence;
+      let read;
       try {
-        presence = await this._readPresence(room);
+        read = await this._serialize(async () => {
+          this._clearTreeCache();
+          await this._refreshTreeCache();
+          return await this._readPresenceContent(room);
+        });
       } catch (e) {
         this._handleApiError(e, "read presence");
         return;
       }
 
-      let anyOccupied = presence.some(p => p && isOccupied(p.iso));
+      let anyPresent = read.entries.some(e => e && isPresent(e.iso));
 
-      if (!anyOccupied) {
+      if (!anyPresent) {
         await this._sleep(DEAD_CONFIRM_MS);
         try {
-          presence = await this._readPresence(room);
+          read = await this._serialize(async () => {
+            this._clearTreeCache();
+            await this._refreshTreeCache();
+            return await this._readPresenceContent(room);
+          });
         } catch (e) {
           this._handleApiError(e, "read presence (confirm)");
           return;
         }
-        anyOccupied = presence.some(p => p && isOccupied(p.iso));
+        anyPresent = read.entries.some(e => e && isPresent(e.iso));
       }
 
-      if (!anyOccupied) {
+      if (!anyPresent) {
         this._setStatus("Resetting dead room...");
 
         try {
@@ -1251,34 +1321,56 @@ export class ChatRoom extends App {
           }
         }
 
-        for (let s = 0; s < SLOTS; s++) {
-          if (!presence[s]) continue;
-          try {
-            await this._writeWithRetry(
-              "data/" + room + "/presence/slot" + s + ".txt",
-              (cur) => (cur === "" ? null : ""),
-              "reset slot " + s
-            );
-          } catch (e) {
-            if (e.message === "BAD_SESSION") {
-              this._handleApiError(e, "reset presence");
-              return;
-            }
+        try {
+          await this._writeWithRetry(
+            "data/" + room + "/presence.txt",
+            (cur) => (cur === "" ? null : this._serializePresence(new Array(SLOTS).fill(null))),
+            "reset " + room + " presence"
+          );
+        } catch (e) {
+          if (e.message === "BAD_SESSION") {
+            this._handleApiError(e, "reset presence");
+            return;
           }
         }
 
         this._clearTreeCache();
-
-        try {
-          presence = await this._readPresence(room);
-        } catch (e) {
-          this._handleApiError(e, "read presence after reset");
-          return;
-        }
       }
 
-      const slot = await this._claimSlot(room, presence);
-      if (slot === null) {
+      let slot = -1;
+      for (let i = 0; i < SLOTS; i++) {
+        const e = read.entries[i];
+        if (!e || !isPresent(e.iso)) { slot = i; break; }
+      }
+
+      if (slot < 0) {
+        this._setStatus("Room is full.");
+        return;
+      }
+
+      const path = "data/" + room + "/presence.txt";
+      const myIso = nowIso();
+      const myName = this.username;
+      const self = this;
+
+      let claimResult;
+      try {
+        claimResult = await this._serialize(() =>
+          this._writeWithRetry(
+            path,
+            (currentContent) => {
+              const newLine = "slot" + slot + "|" + myName + "|" + myIso;
+              return self._splicePresenceLine(currentContent, slot, newLine);
+            },
+            "join " + room
+          )
+        );
+      } catch (e) {
+        this._handleApiError(e, "claim slot");
+        return;
+      }
+
+      if (!claimResult.ok) {
         this._setStatus("Room is full.");
         return;
       }
@@ -1288,7 +1380,6 @@ export class ChatRoom extends App {
       this.messages = [];
       this.seenKeys = new Set();
       this.users = [];
-      this._lastHeartbeatAt = 0;
 
       this.roomTitleLabel.text = ROOM_LABELS[room];
       this.inputText = "";
@@ -1297,52 +1388,10 @@ export class ChatRoom extends App {
       this._pushScreen("chat");
       this._clearStatus();
 
-      try {
-        await this._sync();
-      } catch (e) {
-        this._handleApiError(e, "initial sync");
-      }
-      this._startTimers();
+      this._startCycle();
     } finally {
       this._joining = false;
     }
-  }
-
-  async _claimSlot(room, presence) {
-    for (let s = 0; s < SLOTS; s++) {
-      const cur = presence[s];
-      if (cur && isOccupied(cur.iso) && cur.clientId !== this.clientId) {
-        continue;
-      }
-      if (cur && cur.clientId === this.clientId && isOccupied(cur.iso)) {
-        return s;
-      }
-
-      const path = "data/" + room + "/presence/slot" + s + ".txt";
-
-      let wrote = false;
-      try {
-        wrote = await this._writeWithRetry(
-          path,
-          (currentContent) => {
-            if (currentContent) {
-              const parsed = this._parseSlot(currentContent);
-              if (parsed && parsed.clientId !== this.clientId && isOccupied(parsed.iso)) {
-                return null;
-              }
-            }
-            return this._serializeSlot(this.clientId, this.username, nowIso());
-          },
-          "claim slot " + s
-        );
-      } catch (e) {
-        if (e.message === "BAD_SESSION") throw e;
-        continue;
-      }
-
-      if (wrote) return s;
-    }
-    return null;
   }
 
   // ---------- Leave ----------
@@ -1353,10 +1402,11 @@ export class ChatRoom extends App {
       this.stack.pop();
     }
     this._applyScreen("room");
+    this._refreshRoomOccupancy();
   }
 
   async _leaveRoomInternal() {
-    this._stopTimers();
+    this._stopCycle();
 
     if (this.room !== null && this.slot !== null) {
       const room = this.room;
@@ -1364,19 +1414,18 @@ export class ChatRoom extends App {
       this.room = null;
       this.slot = null;
 
-      const path = "data/" + room + "/presence/slot" + slot + ".txt";
+      const path = "data/" + room + "/presence.txt";
+      const self = this;
       try {
-        await this._writeWithRetry(
-          path,
-          (currentContent) => {
-            if (!currentContent) return null;
-            const parsed = this._parseSlot(currentContent);
-            if (parsed && parsed.clientId !== this.clientId) {
-              return null;
-            }
-            return "";
-          },
-          "leave slot " + slot
+        await this._serialize(() =>
+          this._writeWithRetry(
+            path,
+            (currentContent) => {
+              const newLine = "slot" + slot + "|" + self.username + "|" + LEAVE_TIMESTAMP;
+              return self._splicePresenceLine(currentContent, slot, newLine);
+            },
+            "leave slot " + slot
+          )
         );
       } catch (e) {
         // Best-effort.
@@ -1384,76 +1433,126 @@ export class ChatRoom extends App {
     }
   }
 
-  // ---------- Timers ----------
+  // ---------- Cycle scheduler ----------
 
-  _startTimers() {
-    this._stopTimers();
-
-    this._heartbeatTimer = setInterval(() => {
-      this._heartbeat().catch(() => {});
-    }, HEARTBEAT_MS);
-
-    this._syncTimer = setInterval(() => {
-      this._sync().catch(() => {});
-    }, SYNC_MS);
+  _startCycle() {
+    this._stopCycle();
+    this._cycleDelay = CYCLE_MS;
+    const initial = Math.floor(Math.random() * PRESTAGGER_MAX_MS);
+    this._nextCycleAt = Date.now() + initial;
+    this._refreshCountdown();
+    this._cycleTimer = setTimeout(() => this._runCycleLoop(), initial);
   }
 
-  _stopTimers() {
-    if (this._heartbeatTimer) { clearInterval(this._heartbeatTimer); this._heartbeatTimer = null; }
-    if (this._syncTimer)      { clearInterval(this._syncTimer);      this._syncTimer = null; }
-  }
-
-  // ---------- Heartbeat ----------
-
-  async _heartbeat() {
-    if (this.room === null || this.slot === null) return;
-
-    const now = Date.now();
-    if (this._lastHeartbeatAt && (now - this._lastHeartbeatAt) < HEARTBEAT_MS * 0.75) {
-      return;
+  _stopCycle() {
+    if (this._cycleTimer) {
+      clearTimeout(this._cycleTimer);
+      this._cycleTimer = null;
     }
+    this._nextCycleAt = 0;
+    this._refreshCountdown();
+  }
 
-    const path = "data/" + this.room + "/presence/slot" + this.slot + ".txt";
-    const self = this;
+  async _runCycleLoop() {
+    if (this.room === null) return;
 
-    let wrote = false;
+    // The timer just fired, so we are no longer scheduled. Freeze
+    // the countdown at 0 until we reschedule after the cycle.
+    this._nextCycleAt = 0;
+    this._refreshCountdown();
+
+    let retried = false;
     try {
-      wrote = await this._serialize(() =>
-        this._writeWithRetry(
-          path,
-          (currentContent) => {
-            if (!currentContent) {
-              return self._serializeSlot(self.clientId, self.username, nowIso());
-            }
-            const parsed = self._parseSlot(currentContent);
-            if (!parsed) {
-              return self._serializeSlot(self.clientId, self.username, nowIso());
-            }
-            if (parsed.clientId !== self.clientId) {
-              return null;
-            }
-            return self._serializeSlot(self.clientId, self.username, nowIso());
-          },
-          "heartbeat slot " + this.slot
-        )
-      );
+      retried = await this._cycle();
     } catch (e) {
-      if (e.message === "BAD_SESSION") {
-        this._handleApiError(e, "heartbeat");
+      if (e && e.message === "BAD_SESSION") {
+        this._handleApiError(e, "cycle");
         return;
       }
-      return;
+      // Non-fatal. The next cycle will try again.
     }
 
-    if (wrote) {
-      this._lastHeartbeatAt = now;
+    if (retried) {
+      const nudge = STAGGER_MIN_MS + Math.floor(Math.random() * (STAGGER_MAX_MS - STAGGER_MIN_MS));
+      this._cycleDelay += nudge;
     } else {
-      this._setStatus("Your slot was taken. Leaving...");
-      await this._leaveRoom();
+      this._cycleDelay = CYCLE_MS;
     }
+
+    if (this.room === null) return;
+
+    this._nextCycleAt = Date.now() + this._cycleDelay;
+    this._refreshCountdown();
+    this._cycleTimer = setTimeout(() => this._runCycleLoop(), this._cycleDelay);
   }
 
-  // ---------- Sync ----------
+  async _cycle() {
+    if (this.room === null || this.slot === null) return false;
+
+    let retried = false;
+
+    await this._serialize(async () => {
+      this._clearTreeCache();
+      await this._refreshTreeCache();
+
+      let logContent = "";
+      const logEntry = this._treeCache.entries.get("data/" + this.room + "/log.txt");
+      if (logEntry) {
+        logContent = await this._readBlob(logEntry.sha);
+      }
+
+      const lines = logContent
+        ? logContent.split("\n").filter(l => l.length > 0)
+        : [];
+
+      for (const line of lines) {
+        const parsed = this._parseMessageLine(line);
+        if (!parsed) continue;
+        const key = parsed.username + "|" + parsed.iso + "|" + parsed.text;
+        if (this.seenKeys.has(key)) continue;
+        this.seenKeys.add(key);
+        this.messages.push(parsed);
+      }
+
+      const pres = await this._readPresenceContent(this.room);
+
+      this.users = [];
+      for (let i = 0; i < SLOTS; i++) {
+        const e = pres.entries[i];
+        if (e && isPresent(e.iso)) {
+          this.users.push({ slot: i, username: e.username });
+        }
+      }
+
+      this._renderMessages();
+      this._renderUsers();
+
+      const path = "data/" + this.room + "/presence.txt";
+      const mySlot = this.slot;
+      const myName = this.username;
+      const myIso  = nowIso();
+      const self   = this;
+
+      try {
+        const result = await self._writeWithRetry(
+          path,
+          (currentContent) => {
+            const newLine = "slot" + mySlot + "|" + myName + "|" + myIso;
+            return self._splicePresenceLine(currentContent, mySlot, newLine);
+          },
+          "cycle presence " + mySlot
+        );
+        if (result.retried) retried = true;
+      } catch (e) {
+        if (e && e.message === "BAD_SESSION") throw e;
+        // Best-effort. Swallow.
+      }
+    });
+
+    return retried;
+  }
+
+  // ---------- Sync (called by manual Update) ----------
 
   async _manualUpdate() {
     if (this._updating) return;
@@ -1470,83 +1569,41 @@ export class ChatRoom extends App {
     this._lastUpdate = now;
     this._setStatus("Updating...");
 
+    // Manual Update reschedules the next automatic cycle from now,
+    // since a cycle is about to run. Cancel any pending timer so it
+    // does not fire on top of the manual cycle. The delay is reset to
+    // CYCLE_MS; manual Update is exempt from the stagger logic, but
+    // the client's accumulated _cycleDelay (if any) is preserved so
+    // the drift already earned is not lost.
+    if (this._cycleTimer) {
+      clearTimeout(this._cycleTimer);
+      this._cycleTimer = null;
+    }
+    this._nextCycleAt = 0;
+    this._refreshCountdown();
+
     try {
-      await this._sync();
-      this._clearStatus();
+      await this._cycle();
     } catch (e) {
       this._handleApiError(e, "update");
-    } finally {
       this._updating = false;
+      // Reschedule even on failure so the client keeps cycling.
+      if (this.room !== null) {
+        this._nextCycleAt = Date.now() + this._cycleDelay;
+        this._refreshCountdown();
+        this._cycleTimer = setTimeout(() => this._runCycleLoop(), this._cycleDelay);
+      }
+      return;
     }
-  }
 
-  async _sync() {
-    if (this.room === null) return;
+    this._updating = false;
+    this._clearStatus();
 
-    return await this._serialize(async () => {
-      this._clearTreeCache();
-      await this._refreshTreeCache();
-
-      let logContent = "";
-      const logEntry = this._treeCache.entries.get("data/" + this.room + "/log.txt");
-      if (logEntry) {
-        try {
-          logContent = await this._readBlob(logEntry.sha);
-        } catch (e) {
-          if (e.message === "BAD_SESSION") { this._handleApiError(e, "sync log"); return; }
-          throw e;
-        }
-      }
-
-      const lines = logContent
-        ? logContent.split("\n").filter(l => l.length > 0)
-        : [];
-
-      for (const line of lines) {
-        const parsed = this._parseMessageLine(line);
-        if (!parsed) continue;
-        const key = parsed.username + "|" + parsed.iso + "|" + parsed.text;
-        if (this.seenKeys.has(key)) continue;
-        this.seenKeys.add(key);
-        this.messages.push(parsed);
-      }
-
-      const presence = [];
-      for (let s = 0; s < SLOTS; s++) {
-        const path = "data/" + this.room + "/presence/slot" + s + ".txt";
-        const entry = this._treeCache.entries.get(path);
-        let rec = null;
-        if (entry) {
-          try {
-            const content = await this._readBlob(entry.sha);
-            if (content) {
-              const parsed = this._parseSlot(content);
-              if (parsed) rec = parsed;
-            }
-          } catch (e) {
-            if (e.message === "BAD_SESSION") { this._handleApiError(e, "sync presence"); return; }
-          }
-        }
-        presence.push(rec);
-      }
-
-      this.users = [];
-      let selfListed = false;
-      for (let s = 0; s < SLOTS; s++) {
-        const p = presence[s];
-        if (p && isFresh(p.iso)) {
-          this.users.push({ slot: s, username: p.username, clientId: p.clientId });
-          if (p.clientId === this.clientId) selfListed = true;
-        }
-      }
-      if (!selfListed && this.slot !== null) {
-        this.users.push({ slot: this.slot, username: this.username, clientId: this.clientId });
-        this.users.sort((a, b) => a.slot - b.slot);
-      }
-
-      this._renderMessages();
-      this._renderUsers();
-    });
+    if (this.room !== null) {
+      this._nextCycleAt = Date.now() + this._cycleDelay;
+      this._refreshCountdown();
+      this._cycleTimer = setTimeout(() => this._runCycleLoop(), this._cycleDelay);
+    }
   }
 
   _parseMessageLine(line) {
@@ -1581,7 +1638,6 @@ export class ChatRoom extends App {
 
   _renderUsers() {
     if (this.mobile) {
-      // Slot prefix plus username, clipped to fit the strip.
       for (let s = 0; s < SLOTS; s++) {
         const t = this.userTexts[s];
         const u = this.users.find(x => x.slot === s);
@@ -1592,7 +1648,7 @@ export class ChatRoom extends App {
         let name = u.username;
         if (name.length > 6) name = name.slice(0, 6);
         t.text = s + "." + name;
-        t.color = (u.clientId === this.clientId) ? "#6aa9ff" : "#e08080";
+        t.color = (u.username === this.username) ? "#6aa9ff" : "#e08080";
       }
       return;
     }
@@ -1606,7 +1662,7 @@ export class ChatRoom extends App {
       }
       const pad = String(s) + ".";
       t.text = pad + " " + u.username;
-      t.color = (u.clientId === this.clientId) ? "#6aa9ff" : "#e08080";
+      t.color = (u.username === this.username) ? "#6aa9ff" : "#e08080";
     }
   }
 
@@ -1615,9 +1671,6 @@ export class ChatRoom extends App {
   async _sendMessage() {
     if (this.room === null || this.slot === null) return;
 
-    // In-flight guard: a second Send tap while the first is still
-    // talking to GitHub is dropped on the floor. This is what keeps
-    // a double-tap from firing two overlapping writes.
     if (this._sending) return;
 
     const text = this.inputText.trim();
@@ -1632,10 +1685,6 @@ export class ChatRoom extends App {
     }
 
     this._sending = true;
-    // Stamp on commitment, not on success. The cooldown is measured
-    // from "user tried to send", which is what a user actually
-    // perceives. A failed write burning a cooldown slot is rare
-    // enough that this is the right trade.
     this._lastSend = now;
 
     const safe = text.replace(/\|/g, "/").replace(/\n/g, " ").replace(/\r/g, " ");
@@ -1664,17 +1713,9 @@ export class ChatRoom extends App {
       this._refreshChatInput();
       this._clearStatus();
 
-      // On mobile, hide the keyboard after a send so the log is
-      // visible again.
       if (this.mobile && this._chatKeyboardVisible) {
         this._chatKeyboardVisible = false;
         this._applyChatKeyboardLayout();
-      }
-
-      try {
-        await this._sync();
-      } catch (e) {
-        // Non-fatal.
       }
     } catch (e) {
       if (e.message === "BAD_SESSION") {
@@ -1736,7 +1777,7 @@ export class ChatRoom extends App {
 
   _handleApiError(e, where) {
     if (e && e.message === "BAD_SESSION") {
-      this._stopTimers();
+      this._stopCycle();
       this._leaveRoomInternal();
       this._setStatus("Session unavailable.");
       return;
@@ -1761,6 +1802,10 @@ export class ChatRoom extends App {
 
       if (top === "username") this._refreshUsernameField();
       if (top === "chat")     this._refreshChatInput();
+    }
+
+    if (top === "chat") {
+      this._refreshCountdown();
     }
   }
 }
