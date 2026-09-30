@@ -949,6 +949,20 @@ export class ChatRoom extends App {
     return s.replace(/\|/g, "").replace(/\n/g, "").replace(/\r/g, "").trim();
   }
 
+  _setStatus(msg) {
+    const top = this.stack[this.stack.length - 1];
+    const text = msg || "";
+    if (top === "chat" && this.statusLabel) {
+      this.statusLabel.text = text;
+    } else if (this.roomStatusLabel) {
+      this.roomStatusLabel.text = text;
+    }
+  }
+
+  _clearStatus() {
+    this._setStatus("");
+  }
+
   // =================================================================
   // GIT DATA API PRIMITIVES
   // =================================================================
