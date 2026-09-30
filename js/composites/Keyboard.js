@@ -7,15 +7,14 @@
 // keyboard.
 //
 // Layout: three rows of letters (uppercase only) plus one row of
-// digits, plus a wide Backspace key at the end of the letters row.
-// QWERTY, shift, lowercase, and symbols are deliberate non-goals;
-// extending is a one-file change here.
+// digits. Row 2 holds U V W X Y Z followed by a wide Space key and a
+// wide Backspace key, each spanning two column slots. QWERTY, shift,
+// lowercase, and symbols are deliberate non-goals; extending is a
+// one-file change here.
 //
-// Backspace is a normal key to the consumer: it reports the string
-// "Backspace" via onKey, and the consumer handles it the same way it
-// would handle a physical backspace. The key occupies two column
-// slots plus the gap between them, so it is visually wide but the
-// layout math stays simple.
+// Space reports the string " " via onKey. Backspace reports the
+// string "Backspace" via onKey. Consumers handle both the same way
+// they handle a physical space or backspace: as ordinary keys.
 //
 // Structure: a Composite full of Button children, one per key. Keys
 // are hit-tested and dispatched by the existing router like any
@@ -48,11 +47,11 @@ const KEY_TEXT_COLOR  = "#e6efe6";
 const KEY_FONT        = "bold 26px sans-serif";
 const SPECIAL_KEY_FONT = "bold 18px sans-serif";
 
-// Row index and column index where the Backspace key is placed.
-// It sits immediately after Z in row 2 (zero-based), and is two
-// column slots wide.
-const BACKSPACE_ROW = 2;
-const BACKSPACE_COL = 6;
+// Row index and starting column for the two wide keys. Both span two
+// column slots plus the gap between them.
+const WIDE_ROW      = 2;
+const SPACE_COL     = 6;
+const BACKSPACE_COL = 8;
 
 export class Keyboard extends Composite {
   constructor(opts = {}) {
@@ -87,14 +86,27 @@ export class Keyboard extends Composite {
       }
     }
 
-    // Wide Backspace key. Two column slots plus the gap between them.
-    const bsW = keyW * 2 + GAP;
-    const bsX = BACKSPACE_COL * (keyW + GAP);
-    const bsY = BACKSPACE_ROW * (keyH + GAP);
+    // Wide Space key. Two column slots plus the gap between them.
+    const wideW = keyW * 2 + GAP;
+    const wideY = WIDE_ROW * (keyH + GAP);
 
+    const spaceBtn = new Button({
+      x: SPACE_COL * (keyW + GAP), y: wideY,
+      w: wideW, h: keyH,
+      text: "Space",
+      fill:        KEY_FILL,
+      stroke:      KEY_STROKE,
+      strokeWidth: KEY_STROKE_W,
+      radius:      KEY_RADIUS,
+      textOptions: { font: SPECIAL_KEY_FONT, color: KEY_TEXT_COLOR },
+      onClick:     () => onKey(" "),
+    });
+    this.add(spaceBtn);
+
+    // Wide Backspace key, to the right of Space.
     const backspaceBtn = new Button({
-      x: bsX, y: bsY,
-      w: bsW, h: keyH,
+      x: BACKSPACE_COL * (keyW + GAP), y: wideY,
+      w: wideW, h: keyH,
       text: "Backspace",
       fill:        KEY_FILL,
       stroke:      KEY_STROKE,
