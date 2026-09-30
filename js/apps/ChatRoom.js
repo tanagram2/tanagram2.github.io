@@ -41,6 +41,19 @@
 // blob, and the presence blob; updates the message and user lists;
 // refreshes the client's own presence line; writes presence back.
 //
+// Request budget notes:
+//   - _fetchTreeContext uses the commits-by-ref endpoint to fold the
+//     ref read and the commit read into one request. Then one tree
+//     read. Two requests per context fetch instead of three.
+//   - _cycle caches the log blob sha. If the log entry in the tree
+//     carries the same sha as last cycle, the log blob is not read
+//     again.
+//   - _writeWithRetry accepts a hint carrying a tree context the
+//     caller already has (commit sha, tree sha, entries, and the
+//     current content of the file being written). If the hint's
+//     commit sha matches the live ref, the write path skips the
+//     ref/commit/tree reads and the file-content read.
+//
 // Decongestion: on a cycle that had to retry at least once before
 // succeeding, shift the next cycle later by a random 500-3000ms. This
 // is one-way drift, so a pack of clients that started in lockstep
@@ -126,13 +139,6 @@ function fromBase64(b64) {
   return new TextDecoder().decode(bytes);
 }
 
-function randomId() {
-  let s = "";
-  const chars = "abcdefghijklmnopqrstuvwxyz0123456789";
-  for (let i = 0; i < 24; i++) s += chars[Math.floor(Math.random() * chars.length)];
-  return s + "-" + Date.now().toString(36);
-}
-
 function nowIso() {
   return new Date().toISOString();
 }
@@ -161,8 +167,6 @@ export class ChatRoom extends App {
     this.session  = this._loadSession();
     this.username = "";
 
-    this.clientId = randomId();
-
     this.room = null;
     this.slot = null;
 
@@ -170,9 +174,9 @@ export class ChatRoom extends App {
     this.seenKeys = new Set();
     this.users    = [];
 
-    this._cycleTimer   = null;
-    this._cycleDelay   = CYCLE_MS;
-    this._nextCycleAt  = 0;
+    this._cycleTimer  = null;
+    this._cycleDelay  = CYCLE_MS;
+    this._nextCycleAt = 0;
 
     this._lastUpdate = 0;
     this._lastSend   = 0;
@@ -190,7 +194,8 @@ export class ChatRoom extends App {
 
     this._joining = false;
 
-    this._treeCache = null;
+    // Last seen log blob sha. Used to skip re-reading an unchanged log.
+    this._lastLogSha = null;
 
     this._opChain = Promise.resolve();
 
@@ -255,7 +260,6 @@ export class ChatRoom extends App {
 
   _buildUsernameScreen() {
     const W = Viewport.width;
-    const H = Viewport.height;
 
     const screen = new Panel({
       x: 0, y: 0, w: "100%", h: "100%",
@@ -898,13 +902,12 @@ export class ChatRoom extends App {
 
   async _readAllRoomCounts() {
     return await this._serialize(async () => {
-      this._clearTreeCache();
-      await this._refreshTreeCache();
+      const ctx = await this._fetchTreeContext();
 
       const out = {};
       for (const name of ROOMS) {
         const path  = "data/" + name + "/presence.txt";
-        const entry = this._treeCache.entries.get(path);
+        const entry = ctx.entries.get(path);
         let content = "";
         if (entry) {
           content = await this._readBlob(entry.sha);
@@ -953,6 +956,17 @@ export class ChatRoom extends App {
     return Object.assign({ "Content-Type": "application/json" }, this._authHeaders());
   }
 
+  // One request returns the branch tip commit, whose tree sha we
+  // extract. This folds the old ref read and commit read into one.
+  async _readCommitByRef() {
+    const url = API + "commits/" + encodeURIComponent(BRANCH);
+    const res = await fetch(url, { headers: this._authHeaders(), cache: "no-store" });
+    if (res.status === 401) throw new Error("BAD_SESSION");
+    if (!res.ok) throw new Error("READ_COMMIT_FAILED_" + res.status);
+    const json = await res.json();
+    return { commitSha: json.sha, treeSha: json.commit.tree.sha };
+  }
+
   async _readRef() {
     const url = API + "git/ref/heads/" + encodeURIComponent(BRANCH);
     const res = await fetch(url, { headers: this._authHeaders(), cache: "no-store" });
@@ -960,15 +974,6 @@ export class ChatRoom extends App {
     if (!res.ok) throw new Error("READ_REF_FAILED_" + res.status);
     const json = await res.json();
     return json.object.sha;
-  }
-
-  async _readCommitTreeSha(commitSha) {
-    const url = API + "git/commits/" + commitSha;
-    const res = await fetch(url, { headers: this._authHeaders(), cache: "no-store" });
-    if (res.status === 401) throw new Error("BAD_SESSION");
-    if (!res.ok) throw new Error("READ_COMMIT_FAILED_" + res.status);
-    const json = await res.json();
-    return json.tree.sha;
   }
 
   async _readTreeEntries(treeSha) {
@@ -997,16 +1002,26 @@ export class ChatRoom extends App {
     return fromBase64(json.content);
   }
 
-  async _refreshTreeCache() {
-    const commitSha = await this._readRef();
-    const treeSha   = await this._readCommitTreeSha(commitSha);
-    const entries   = await this._readTreeEntries(treeSha);
-    this._treeCache = { commitSha, treeSha, entries };
-    return this._treeCache;
+  // Two requests: commit-by-ref, then tree. Returns commit sha, tree
+  // sha, and the entries map.
+  async _fetchTreeContext() {
+    const c = await this._readCommitByRef();
+    const entries = await this._readTreeEntries(c.treeSha);
+    return { commitSha: c.commitSha, treeSha: c.treeSha, entries };
   }
 
-  _clearTreeCache() {
-    this._treeCache = null;
+  // Read a presence file using an already-fetched entries map.
+  // Returns { content, entries } where entries is the parsed slot
+  // array. content is the raw text (empty string if the file is
+  // missing or empty).
+  async _readPresenceFromEntries(ctxEntries, room) {
+    const path  = "data/" + room + "/presence.txt";
+    const entry = ctxEntries.get(path);
+    let content = "";
+    if (entry) {
+      content = await this._readBlob(entry.sha);
+    }
+    return { content, entries: this._parsePresence(content) };
   }
 
   async _createBlob(content) {
@@ -1075,9 +1090,14 @@ export class ChatRoom extends App {
   }
 
   // Returns { ok, retried }. ok is true when the write landed. retried
-  // is true if at least one attempt had to loop. The cycle scheduler
-  // uses retried to decide whether to nudge itself later.
-  async _writeWithRetry(path, buildContent, message) {
+  // is true if at least one attempt had to loop.
+  //
+  // hint is optional and carries a tree context the caller already
+  // has: { commitSha, treeSha, entries, content }. If the hint's
+  // commitSha matches the live ref, the write path skips the
+  // ref/commit/tree reads and the file-content read. On any hint miss
+  // we fall back to the full read path for that attempt.
+  async _writeWithRetry(path, buildContent, message, hint) {
     let lastError = null;
     let retried   = false;
 
@@ -1087,27 +1107,52 @@ export class ChatRoom extends App {
       let currentCommitSha;
       let treeSha;
       let entries;
-      try {
-        currentCommitSha = await this._readRef();
-        treeSha          = await this._readCommitTreeSha(currentCommitSha);
-        entries          = await this._readTreeEntries(treeSha);
-      } catch (e) {
-        if (e.message === "BAD_SESSION") throw e;
-        lastError = e;
-        await this._sleep(Math.random() * PUT_BACKOFF_MS);
-        continue;
+      let currentContent = null;
+
+      let hintUsed = false;
+      if (attempt === 0 && hint && hint.commitSha && hint.entries) {
+        let liveRef;
+        try {
+          liveRef = await this._readRef();
+        } catch (e) {
+          if (e.message === "BAD_SESSION") throw e;
+          liveRef = null;
+        }
+        if (liveRef !== null && liveRef === hint.commitSha) {
+          currentCommitSha = hint.commitSha;
+          treeSha          = hint.treeSha;
+          entries          = hint.entries;
+          currentContent   = hint.content !== undefined ? hint.content : null;
+          hintUsed         = true;
+        }
       }
 
-      let currentContent = "";
-      const entry = entries.get(path);
-      if (entry) {
+      if (!hintUsed) {
         try {
-          currentContent = await this._readBlob(entry.sha);
+          const c  = await this._readCommitByRef();
+          currentCommitSha = c.commitSha;
+          treeSha          = c.treeSha;
+          entries          = await this._readTreeEntries(treeSha);
         } catch (e) {
           if (e.message === "BAD_SESSION") throw e;
           lastError = e;
           await this._sleep(Math.random() * PUT_BACKOFF_MS);
           continue;
+        }
+      }
+
+      if (currentContent === null) {
+        currentContent = "";
+        const entry = entries.get(path);
+        if (entry) {
+          try {
+            currentContent = await this._readBlob(entry.sha);
+          } catch (e) {
+            if (e.message === "BAD_SESSION") throw e;
+            lastError = e;
+            await this._sleep(Math.random() * PUT_BACKOFF_MS);
+            continue;
+          }
         }
       }
 
@@ -1141,7 +1186,6 @@ export class ChatRoom extends App {
       }
 
       if (verifyRef === newCommitSha) {
-        this._clearTreeCache();
         return { ok: true, retried };
       }
 
@@ -1158,7 +1202,6 @@ export class ChatRoom extends App {
         try {
           const postRef = await this._readRef();
           if (postRef === newCommitSha) {
-            this._clearTreeCache();
             return { ok: true, retried };
           }
         } catch (e2) {
@@ -1169,7 +1212,6 @@ export class ChatRoom extends App {
         continue;
       }
 
-      this._clearTreeCache();
       return { ok: true, retried };
     }
 
@@ -1225,19 +1267,6 @@ export class ChatRoom extends App {
     return n;
   }
 
-  async _readPresenceContent(room) {
-    const path = "data/" + room + "/presence.txt";
-    if (!this._treeCache) {
-      await this._refreshTreeCache();
-    }
-    const entry = this._treeCache.entries.get(path);
-    let content = "";
-    if (entry) {
-      content = await this._readBlob(entry.sha);
-    }
-    return { content, entries: this._parsePresence(content) };
-  }
-
   // ---------- Room join ----------
 
   async _joinRoom(room) {
@@ -1247,33 +1276,38 @@ export class ChatRoom extends App {
     this._setStatus("Joining " + ROOM_LABELS[room] + "...");
 
     try {
-      let read;
+      let ctx;
+      let pres;
       try {
-        read = await this._serialize(async () => {
-          this._clearTreeCache();
-          await this._refreshTreeCache();
-          return await this._readPresenceContent(room);
+        const r = await this._serialize(async () => {
+          const c = await this._fetchTreeContext();
+          const p = await this._readPresenceFromEntries(c.entries, room);
+          return { ctx: c, pres: p };
         });
+        ctx  = r.ctx;
+        pres = r.pres;
       } catch (e) {
         this._handleApiError(e, "read presence");
         return;
       }
 
-      let anyPresent = read.entries.some(e => e && isPresent(e.iso));
+      let anyPresent = pres.entries.some(e => e && isPresent(e.iso));
 
       if (!anyPresent) {
         await this._sleep(DEAD_CONFIRM_MS);
         try {
-          read = await this._serialize(async () => {
-            this._clearTreeCache();
-            await this._refreshTreeCache();
-            return await this._readPresenceContent(room);
+          const r = await this._serialize(async () => {
+            const c = await this._fetchTreeContext();
+            const p = await this._readPresenceFromEntries(c.entries, room);
+            return { ctx: c, pres: p };
           });
+          ctx  = r.ctx;
+          pres = r.pres;
         } catch (e) {
           this._handleApiError(e, "read presence (confirm)");
           return;
         }
-        anyPresent = read.entries.some(e => e && isPresent(e.iso));
+        anyPresent = pres.entries.some(e => e && isPresent(e.iso));
       }
 
       if (!anyPresent) {
@@ -1305,12 +1339,24 @@ export class ChatRoom extends App {
           }
         }
 
-        this._clearTreeCache();
+        // Refetch because we just committed twice.
+        try {
+          const r = await this._serialize(async () => {
+            const c = await this._fetchTreeContext();
+            const p = await this._readPresenceFromEntries(c.entries, room);
+            return { ctx: c, pres: p };
+          });
+          ctx  = r.ctx;
+          pres = r.pres;
+        } catch (e) {
+          this._handleApiError(e, "read presence after reset");
+          return;
+        }
       }
 
       let slot = -1;
       for (let i = 0; i < SLOTS; i++) {
-        const e = read.entries[i];
+        const e = pres.entries[i];
         if (!e || !isPresent(e.iso)) { slot = i; break; }
       }
 
@@ -1324,6 +1370,13 @@ export class ChatRoom extends App {
       const myName = this.username;
       const self   = this;
 
+      const hint = {
+        commitSha: ctx.commitSha,
+        treeSha:   ctx.treeSha,
+        entries:   ctx.entries,
+        content:   pres.content,
+      };
+
       let claimResult;
       try {
         claimResult = await this._serialize(() =>
@@ -1333,7 +1386,8 @@ export class ChatRoom extends App {
               const newLine = "slot" + slot + "|" + myName + "|" + myIso;
               return self._splicePresenceLine(currentContent, slot, newLine);
             },
-            "join " + room
+            "join " + room,
+            hint
           )
         );
       } catch (e) {
@@ -1346,11 +1400,12 @@ export class ChatRoom extends App {
         return;
       }
 
-      this.room     = room;
-      this.slot     = slot;
-      this.messages = [];
-      this.seenKeys = new Set();
-      this.users    = [];
+      this.room        = room;
+      this.slot        = slot;
+      this.messages    = [];
+      this.seenKeys    = new Set();
+      this.users       = [];
+      this._lastLogSha = null;
 
       this.roomTitleLabel.text = ROOM_LABELS[room];
       this.inputText = "";
@@ -1427,8 +1482,6 @@ export class ChatRoom extends App {
   async _runCycleLoop() {
     if (this.room === null) return;
 
-    // Timer just fired. Freeze countdown at 0 until the cycle finishes
-    // and we reschedule.
     this._nextCycleAt = 0;
     this._refreshCountdown();
 
@@ -1462,33 +1515,48 @@ export class ChatRoom extends App {
     let retried = false;
 
     await this._serialize(async () => {
-      this._clearTreeCache();
-      await this._refreshTreeCache();
+      const ctx = await this._fetchTreeContext();
 
-      let logContent = "";
-      const logEntry = this._treeCache.entries.get("data/" + this.room + "/log.txt");
+      // Log read. Skip the blob read if the tree sha for the log has
+      // not changed since last cycle.
+      let logContent = null;
+      const logEntry = ctx.entries.get("data/" + this.room + "/log.txt");
       if (logEntry) {
-        logContent = await this._readBlob(logEntry.sha);
+        if (logEntry.sha !== this._lastLogSha) {
+          logContent = await this._readBlob(logEntry.sha);
+          this._lastLogSha = logEntry.sha;
+        }
+      } else {
+        this._lastLogSha = null;
       }
 
-      const lines = logContent
-        ? logContent.split("\n").filter(l => l.length > 0)
-        : [];
+      if (logContent !== null) {
+        const lines = logContent
+          ? logContent.split("\n").filter(l => l.length > 0)
+          : [];
 
-      for (const line of lines) {
-        const parsed = this._parseMessageLine(line);
-        if (!parsed) continue;
-        const key = parsed.username + "|" + parsed.iso + "|" + parsed.text;
-        if (this.seenKeys.has(key)) continue;
-        this.seenKeys.add(key);
-        this.messages.push(parsed);
+        for (const line of lines) {
+          const parsed = this._parseMessageLine(line);
+          if (!parsed) continue;
+          const key = parsed.username + "|" + parsed.iso + "|" + parsed.text;
+          if (this.seenKeys.has(key)) continue;
+          this.seenKeys.add(key);
+          this.messages.push(parsed);
+        }
       }
 
-      const pres = await this._readPresenceContent(this.room);
+      // Presence read.
+      const presPath  = "data/" + this.room + "/presence.txt";
+      const presEntry = ctx.entries.get(presPath);
+      let presContent = "";
+      if (presEntry) {
+        presContent = await this._readBlob(presEntry.sha);
+      }
+      const presEntries = this._parsePresence(presContent);
 
       this.users = [];
       for (let i = 0; i < SLOTS; i++) {
-        const e = pres.entries[i];
+        const e = presEntries[i];
         if (e && isPresent(e.iso)) {
           this.users.push({ slot: i, username: e.username });
         }
@@ -1497,20 +1565,27 @@ export class ChatRoom extends App {
       this._renderMessages();
       this._renderUsers();
 
-      const path   = "data/" + this.room + "/presence.txt";
       const mySlot = this.slot;
       const myName = this.username;
       const myIso  = nowIso();
       const self   = this;
 
+      const hint = {
+        commitSha: ctx.commitSha,
+        treeSha:   ctx.treeSha,
+        entries:   ctx.entries,
+        content:   presContent,
+      };
+
       try {
         const result = await self._writeWithRetry(
-          path,
+          presPath,
           (currentContent) => {
             const newLine = "slot" + mySlot + "|" + myName + "|" + myIso;
             return self._splicePresenceLine(currentContent, mySlot, newLine);
           },
-          "cycle presence " + mySlot
+          "cycle presence " + mySlot,
+          hint
         );
         if (result.retried) retried = true;
       } catch (e) {
@@ -1535,12 +1610,10 @@ export class ChatRoom extends App {
       return;
     }
 
-    this._updating    = true;
-    this._lastUpdate  = now;
+    this._updating   = true;
+    this._lastUpdate = now;
     this._setStatus("Updating...");
 
-    // Cancel the pending automatic cycle. Manual Update is exempt from
-    // the stagger logic, but the accumulated _cycleDelay is preserved.
     if (this._cycleTimer) {
       clearTimeout(this._cycleTimer);
       this._cycleTimer = null;
@@ -1667,6 +1740,10 @@ export class ChatRoom extends App {
           "chat from " + this.username
         )
       );
+
+      // Our own write changed the log; invalidate the cached sha so
+      // the next cycle re-reads it.
+      this._lastLogSha = null;
 
       const key = this.username + "|" + iso + "|" + safe;
       if (!this.seenKeys.has(key)) {
