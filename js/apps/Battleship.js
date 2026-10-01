@@ -32,6 +32,16 @@
 // without reasoning about whether two clients could have read the
 // same value.
 //
+// First-turn selection is a vote-plus-ready handshake. Once two
+// players are present, each independently chooses Me or Defer, then
+// presses Ready. A vote is required before Ready becomes available.
+// When both players are ready, the next writer resolves the outcome:
+//   Me vs Me      -> coinflip
+//   Me vs Defer   -> the Me player goes first
+//   Defer vs Defer-> coinflip
+// The resolution and the two votes are committed in the same write
+// that flips started to 1, so both clients see the same outcome.
+//
 // Shared-file trust model: both players read and write the same
 // game.txt. There is no attempt to hide fleet positions from the
 // client. This is a fun project, not a competitive one.
@@ -96,6 +106,13 @@ const FLEET = [
 const BOARD_W = 10;
 const BOARD_H = 10;
 
+// Busy-button colors. The helper swaps the self shape's fill to BUSY
+// while a git request is in flight, and restores the original fill on
+// completion. The original is captured the first time a button goes
+// busy and kept until the button is done.
+
+const BUSY_FILL = "#444a52";
+
 // base64 helpers. The browser's btoa/atob mishandle non-ASCII.
 
 function toBase64(str) {
@@ -155,8 +172,13 @@ export class Battleship extends App {
 
     // Fire state.
     this.fireCursor = { x: 0, y: 0 };
+    this.lockedShot = null;         // { x, y } or null
     this.lastFeedback = "";
     this._awaitingFire = false;
+
+    // First-turn vote state (local mirror of the shared values).
+    this.myVote   = null;           // "me" | "defer" | null
+    this.myReady  = false;
 
     // Chat UI.
     this.chatOpen = false;
@@ -174,7 +196,8 @@ export class Battleship extends App {
     this._sending  = false;
     this._updating = false;
     this._placingWrite = false;
-    this._startingGame = false;
+    this._votingWrite  = false;
+    this._firing       = false;
 
     this._cursorOn    = true;
     this._cursorTimer = 0;
@@ -218,6 +241,28 @@ export class Battleship extends App {
     const next = this._opChain.then(fn, fn);
     this._opChain = next.catch(() => {});
     return next;
+  }
+
+  // ---------- Busy-button helper ----------
+
+  // Grey out a Button's self shape for the duration of a git request,
+  // then restore its original fill. The original fill is captured the
+  // first time the button is made busy and kept until _busyEnd. Local
+  // to this app on purpose; not a Button composite change.
+
+  _busyStart(btn) {
+    if (!btn || !btn.self) return;
+    if (btn._busyBaseFill === undefined) {
+      btn._busyBaseFill = btn.self.fill;
+    }
+    btn.self.fill = BUSY_FILL;
+  }
+
+  _busyEnd(btn) {
+    if (!btn || !btn.self) return;
+    if (btn._busyBaseFill !== undefined) {
+      btn.self.fill = btn._busyBaseFill;
+    }
   }
 
   // ---------- Field rendering ----------
@@ -455,7 +500,7 @@ export class Battleship extends App {
       onClick: () => this._leaveRoom(),
     }));
 
-    screen.add(new Button({
+    this.updateBtn = new Button({
       x: W - 164, y: 24, w: 140, h: 48,
       text: "Update",
       fill: "#2a3552",
@@ -464,7 +509,8 @@ export class Battleship extends App {
       radius: 8,
       textOptions: { font: "bold 18px sans-serif", color: "#ffffff" },
       onClick: () => this._manualUpdate(),
-    }));
+    });
+    screen.add(this.updateBtn);
 
     this.cycleCountdownLabel = new Text({
       x: W - 164 + 70,
@@ -610,7 +656,7 @@ export class Battleship extends App {
     // Controls legend.
     screen.add(new Text({
       x: W / 2, y: H - 40,
-      text: "Mouse: hover and click. Keys: WASD/Arrows move, R rotate, Enter place or fire.",
+      text: "Mouse: hover and click. Keys: WASD/Arrows move, R rotate, Enter place or lock a shot.",
       font: "13px monospace",
       color: "#607080",
       align: "center",
@@ -620,8 +666,50 @@ export class Battleship extends App {
     // Action row of buttons. Visibility is toggled by state.
     const actionY = H - 96;
 
+    // Vote buttons: Me / Defer.
+    this.voteMeBtn = new Button({
+      x: W / 2 - 310, y: actionY, w: 200, h: 52,
+      text: "Me",
+      fill: "#2a3552",
+      stroke: "#6a86b8",
+      strokeWidth: 2,
+      radius: 8,
+      textOptions: { font: "bold 18px sans-serif", color: "#ffffff" },
+      onClick: () => this._setVote("me"),
+    });
+    this.voteMeBtn.visible = false;
+    screen.add(this.voteMeBtn);
+
+    this.voteDeferBtn = new Button({
+      x: W / 2 - 100, y: actionY, w: 200, h: 52,
+      text: "Defer",
+      fill: "#2a3552",
+      stroke: "#6a86b8",
+      strokeWidth: 2,
+      radius: 8,
+      textOptions: { font: "bold 18px sans-serif", color: "#ffffff" },
+      onClick: () => this._setVote("defer"),
+    });
+    this.voteDeferBtn.visible = false;
+    screen.add(this.voteDeferBtn);
+
+    // Ready / Unready.
+    this.readyBtn = new Button({
+      x: W / 2 + 110, y: actionY, w: 200, h: 52,
+      text: "Ready",
+      fill: "#2a6a3a",
+      stroke: "#6aaa7a",
+      strokeWidth: 2,
+      radius: 8,
+      textOptions: { font: "bold 18px sans-serif", color: "#ffffff" },
+      onClick: () => this._toggleReady(),
+    });
+    this.readyBtn.visible = false;
+    screen.add(this.readyBtn);
+
+    // Lock In / Rotate / Reset during placement.
     this.lockBtn = new Button({
-      x: W / 2 - 240, y: actionY, w: 220, h: 52,
+      x: W / 2 - 340, y: actionY, w: 200, h: 52,
       text: "Lock In",
       fill: "#2a6a3a",
       stroke: "#6aaa7a",
@@ -634,7 +722,7 @@ export class Battleship extends App {
     screen.add(this.lockBtn);
 
     this.rotateBtn = new Button({
-      x: W / 2 - 10, y: actionY, w: 220, h: 52,
+      x: W / 2 - 120, y: actionY, w: 240, h: 52,
       text: "Rotate (R)",
       fill: "#2a2a3a",
       stroke: "#5a5a7a",
@@ -647,7 +735,7 @@ export class Battleship extends App {
     screen.add(this.rotateBtn);
 
     this.resetBtn = new Button({
-      x: W / 2 + 220, y: actionY, w: 200, h: 52,
+      x: W / 2 + 140, y: actionY, w: 200, h: 52,
       text: "Reset",
       fill: "#2a2a3a",
       stroke: "#5a5a7a",
@@ -659,9 +747,9 @@ export class Battleship extends App {
     this.resetBtn.visible = false;
     screen.add(this.resetBtn);
 
-    // Placement phase entry button.
+    // Place Ships entry.
     this.placeBtn = new Button({
-      x: W / 2 - 240, y: actionY, w: 220, h: 52,
+      x: W / 2 - 160, y: actionY, w: 320, h: 52,
       text: "Place Ships",
       fill: "#2a3552",
       stroke: "#6a86b8",
@@ -673,19 +761,34 @@ export class Battleship extends App {
     this.placeBtn.visible = false;
     screen.add(this.placeBtn);
 
-    // Start Game button.
-    this.startBtn = new Button({
-      x: W / 2 - 160, y: actionY, w: 320, h: 52,
-      text: "Start Game",
-      fill: "#2a6a3a",
-      stroke: "#6aaa7a",
+    // Fire button (centered under the boards, appears when a shot is
+    // locked).
+    this.fireBtn = new Button({
+      x: W / 2 - 110, y: actionY, w: 220, h: 52,
+      text: "Fire!",
+      fill: "#8a2020",
+      stroke: "#e06060",
       strokeWidth: 2,
       radius: 8,
-      textOptions: { font: "bold 18px sans-serif", color: "#ffffff" },
-      onClick: () => this._renderFirstModeButtons(),
+      textOptions: { font: "bold 22px sans-serif", color: "#ffffff" },
+      onClick: () => this._fireLockedShot(),
     });
-    this.startBtn.visible = false;
-    screen.add(this.startBtn);
+    this.fireBtn.visible = false;
+    screen.add(this.fireBtn);
+
+    // Vote outcome banner. Shown once both players are ready, until
+    // the game reaches the fire phase.
+    this.outcomeLabel = new Text({
+      x: W / 2,
+      y: H - 96,
+      text: "",
+      font: "bold 18px sans-serif",
+      color: "#a0c0ff",
+      align: "center",
+      baseline: "middle",
+    });
+    this.outcomeLabel.visible = false;
+    screen.add(this.outcomeLabel);
 
     // Chat button + unread badge.
     this.chatBtn = new Button({
@@ -737,7 +840,6 @@ export class Battleship extends App {
 
     this.chatPanel = panel;
 
-    // Title strip.
     panel.add(new Text({
       x: 12, y: 10,
       text: "Room Chat",
@@ -758,7 +860,6 @@ export class Battleship extends App {
       onClick: () => this._toggleChat(),
     }));
 
-    // Log area.
     const logX = 12;
     const logY = 40;
     const logW = pw - 24;
@@ -782,7 +883,6 @@ export class Battleship extends App {
       this.chatMessageTexts.push(t);
     }
 
-    // Input row.
     const rowY = ph - 48;
     const inputX = 12;
     const inputW = pw - 24 - 96 - 8;
@@ -811,7 +911,7 @@ export class Battleship extends App {
     this.inputLabel.text.y = "50%";
     inputPanel.add(this.inputLabel);
 
-    panel.add(new Button({
+    this.sendBtn = new Button({
       x: pw - 12 - 96, y: rowY, w: 96, h: 36,
       text: "Send",
       fill: "#2a4a2a",
@@ -820,7 +920,8 @@ export class Battleship extends App {
       radius: 4,
       textOptions: { font: "bold 14px sans-serif", color: "#ffffff" },
       onClick: () => this._sendChat(),
-    }));
+    });
+    panel.add(this.sendBtn);
 
     this._chatPanelX = px;
     this._chatPanelY = py;
@@ -1424,7 +1525,10 @@ export class Battleship extends App {
       this.placeRot  = false;
       this.myFleet   = null;
       this.fireCursor = { x: 0, y: 0 };
+      this.lockedShot = null;
       this.lastFeedback = "";
+      this.myVote  = null;
+      this.myReady = false;
       this.chatOpen = false;
       if (this.chatPanel) this.chatPanel.visible = false;
       this.unread = 0;
@@ -1554,6 +1658,64 @@ export class Battleship extends App {
       }
       this.game = this._decodeGame(gameContent);
 
+      // Resolve the first-turn handshake if the game has not yet
+      // started and both votes and both ready flags are in. Only the
+      // first writer to reach here flips started; the other sees
+      // started=1 on their next cycle and no-ops.
+      const needsResolve = this.game
+        && !this.game.started
+        && this.game.voteP0 && this.game.voteP1
+        && this.game.readyP0 && this.game.readyP1;
+
+      if (needsResolve) {
+        const resolvedTurn = this._resolveFirstTurn(this.game.voteP0, this.game.voteP1);
+        const mode = this._resolveFirstMode(this.game.voteP0, this.game.voteP1);
+
+        const g = {
+          started:   true,
+          turn:      resolvedTurn,
+          turnCount: (this.game.turnCount || 0) + 1,
+          winner:    null,
+          firstMode: mode,
+          voteP0:    "",
+          voteP1:    "",
+          readyP0:   false,
+          readyP1:   false,
+          players:   this.game.players || {},
+        };
+
+        // Keep the existing per-player blocks (name, fleet, shots).
+        for (let p = 0; p < SLOTS; p++) {
+          const key = "p" + p;
+          if (this.game.players && this.game.players[key]) {
+            g.players[key] = this.game.players[key];
+          } else {
+            g.players[key] = { name: "", fleet: [], shots: [] };
+          }
+        }
+
+        const hint = {
+          commitSha: ctx.commitSha,
+          treeSha:   ctx.treeSha,
+          entries:   ctx.entries,
+          content:   gameContent,
+        };
+
+        try {
+          const result = await this._writeWithRetry(
+            gamePath,
+            () => this._encodeGame(g),
+            "resolve first turn",
+            hint
+          );
+          if (result.retried) retried = true;
+          if (result.ok) this.game = g;
+        } catch (e) {
+          if (e && e.message === "BAD_SESSION") throw e;
+          // Best-effort; next cycle tries again.
+        }
+      }
+
       // Chat.
       const chatPath  = DATA_ROOT + this.room + "/chat.txt";
       const chatEntry = ctx.entries.get(chatPath);
@@ -1612,6 +1774,18 @@ export class Battleship extends App {
     return retried;
   }
 
+  _resolveFirstTurn(v0, v1) {
+    if (v0 === "me" && v1 === "defer") return 0;
+    if (v0 === "defer" && v1 === "me") return 1;
+    return Math.random() < 0.5 ? 0 : 1;
+  }
+
+  _resolveFirstMode(v0, v1) {
+    if (v0 === "me" && v1 === "defer") return "p1";
+    if (v0 === "defer" && v1 === "me") return "p2";
+    return "coin";
+  }
+
   // ---------- Manual Update ----------
 
   async _manualUpdate() {
@@ -1628,6 +1802,7 @@ export class Battleship extends App {
     this._updating   = true;
     this._lastUpdate = now;
     this._setStatus("Updating...");
+    this._busyStart(this.updateBtn);
 
     if (this._cycleTimer) {
       clearTimeout(this._cycleTimer);
@@ -1641,6 +1816,7 @@ export class Battleship extends App {
     } catch (e) {
       this._handleApiError(e, "update");
       this._updating = false;
+      this._busyEnd(this.updateBtn);
       if (this.room !== null) {
         this._nextCycleAt = Date.now() + this._cycleDelay;
         this._refreshCountdown();
@@ -1651,6 +1827,7 @@ export class Battleship extends App {
 
     this._updating = false;
     this._clearStatus();
+    this._busyEnd(this.updateBtn);
 
     if (this.room !== null) {
       this._nextCycleAt = Date.now() + this._cycleDelay;
@@ -1673,6 +1850,10 @@ export class Battleship extends App {
   //   turnCount=<int>
   //   winner=0|1|-1
   //   firstMode=p1|p2|coin
+  //   voteP0=me|defer|
+  //   voteP1=me|defer|
+  //   readyP0=0|1
+  //   readyP1=0|1
   //   #PLAYER 0
   //   name=<username>
   //   fleet=<cells>;<cells>;...
@@ -1687,6 +1868,9 @@ export class Battleship extends App {
   // commit and any miss. A hit does not flip the turn, so turnCount
   // does not advance. Clients use it to detect that the turn has moved
   // since they last read, independent of the turn value itself.
+  //
+  // voteP0 / voteP1 / readyP0 / readyP1 are the first-turn handshake.
+  // They are cleared in the same write that sets started=1.
   // =================================================================
 
   _encodeGame(g) {
@@ -1697,6 +1881,10 @@ export class Battleship extends App {
     L.push("turnCount=" + (g.turnCount || 0));
     L.push("winner=" + (g.winner == null ? -1 : g.winner));
     L.push("firstMode=" + (g.firstMode || ""));
+    L.push("voteP0=" + (g.voteP0 || ""));
+    L.push("voteP1=" + (g.voteP1 || ""));
+    L.push("readyP0=" + (g.readyP0 ? 1 : 0));
+    L.push("readyP1=" + (g.readyP1 ? 1 : 0));
 
     for (let p = 0; p < SLOTS; p++) {
       L.push("#PLAYER " + p);
@@ -1735,6 +1923,10 @@ export class Battleship extends App {
       turnCount: 0,
       winner: null,
       firstMode: "",
+      voteP0: "",
+      voteP1: "",
+      readyP0: false,
+      readyP1: false,
       players: {},
     };
     if (!text) return g;
@@ -1764,6 +1956,10 @@ export class Battleship extends App {
         else if (k === "turnCount") g.turnCount = parseInt(v, 10) || 0;
         else if (k === "winner") g.winner = v === "-1" ? null : parseInt(v, 10);
         else if (k === "firstMode") g.firstMode = v;
+        else if (k === "voteP0") g.voteP0 = v;
+        else if (k === "voteP1") g.voteP1 = v;
+        else if (k === "readyP0") g.readyP0 = v === "1";
+        else if (k === "readyP1") g.readyP1 = v === "1";
       } else if (section === "player" && playerIdx >= 0) {
         const pl = g.players["p" + playerIdx];
         if (k === "name") pl.name = v;
@@ -1801,6 +1997,136 @@ export class Battleship extends App {
   }
 
   // =================================================================
+  // First-turn vote + ready.
+  // =================================================================
+
+  async _setVote(vote) {
+    if (this._votingWrite) return;
+    if (!this.game) return;
+    if (this.game.started) return;
+    if (this.myReady) return;   // vote locked once ready
+
+    this._votingWrite = true;
+    this._setStatus("Recording vote...");
+
+    const mySlot = this.slot;
+    const self   = this;
+
+    try {
+      await this._serialize(async () => {
+        const ctx = await this._fetchTreeContext();
+        const gamePath = DATA_ROOT + this.room + "/game.txt";
+        const entry = ctx.entries.get(gamePath);
+        let content = "";
+        if (entry) content = await this._readBlob(entry.sha);
+        const g = this._decodeGame(content);
+
+        if (g.started) { this.game = g; return; }
+
+        const voteKey  = "voteP" + mySlot;
+        const readyKey = "readyP" + mySlot;
+
+        if (g[readyKey]) { this.game = g; return; }
+
+        g[voteKey] = vote;
+
+        const hint = {
+          commitSha: ctx.commitSha,
+          treeSha:   ctx.treeSha,
+          entries:   ctx.entries,
+          content:   content,
+        };
+
+        await self._writeWithRetry(
+          gamePath,
+          () => self._encodeGame(g),
+          "vote " + mySlot,
+          hint
+        );
+
+        this.game  = g;
+        this.myVote = vote;
+      });
+
+      this._clearStatus();
+      this._renderAll();
+    } catch (e) {
+      this._handleApiError(e, "vote");
+    } finally {
+      this._votingWrite = false;
+    }
+  }
+
+  async _toggleReady() {
+    if (this._votingWrite) return;
+    if (!this.game) return;
+    if (this.game.started) return;
+
+    // Ready requires a vote. Button is disabled (greyed) until a vote
+    // is in, so this guard is belt-and-braces.
+    if (!this.myReady && !this.myVote) return;
+
+    this._votingWrite = true;
+    this._setStatus(this.myReady ? "Unreadying..." : "Readying...");
+    this._busyStart(this.readyBtn);
+
+    const mySlot = this.slot;
+    const self   = this;
+
+    try {
+      await this._serialize(async () => {
+        const ctx = await this._fetchTreeContext();
+        const gamePath = DATA_ROOT + this.room + "/game.txt";
+        const entry = ctx.entries.get(gamePath);
+        let content = "";
+        if (entry) content = await this._readBlob(entry.sha);
+        const g = this._decodeGame(content);
+
+        if (g.started) { this.game = g; return; }
+
+        const voteKey  = "voteP" + mySlot;
+        const readyKey = "readyP" + mySlot;
+
+        const nextReady = !g[readyKey];
+
+        if (nextReady && !g[voteKey]) {
+          // Should not happen given the button is disabled, but do
+          // not write an inconsistent state.
+          this.game = g;
+          return;
+        }
+
+        g[readyKey] = nextReady;
+
+        const hint = {
+          commitSha: ctx.commitSha,
+          treeSha:   ctx.treeSha,
+          entries:   ctx.entries,
+          content:   content,
+        };
+
+        await self._writeWithRetry(
+          gamePath,
+          () => self._encodeGame(g),
+          (nextReady ? "ready " : "unready ") + mySlot,
+          hint
+        );
+
+        this.game   = g;
+        this.myReady = nextReady;
+      });
+
+      this._clearStatus();
+      this._renderAll();
+    } catch (e) {
+      this._handleApiError(e, "ready");
+    } finally {
+      this._votingWrite = false;
+      this._busyEnd(this.readyBtn);
+    }
+  }
+
+  // =================================================================
   // Placement.
   // =================================================================
 
@@ -1812,6 +2138,7 @@ export class Battleship extends App {
     this.placeRot  = false;
     this.myFleet   = null;
     this.hoverCell = { x: 0, y: 0 };
+    this.lockedShot = null;
     this._renderAll();
   }
 
@@ -1869,6 +2196,7 @@ export class Battleship extends App {
     if (this._placingWrite) return;
     this._placingWrite = true;
     this._setStatus("Locking in...");
+    this._busyStart(this.lockBtn);
 
     try {
       await this._serialize(async () => {
@@ -1910,135 +2238,7 @@ export class Battleship extends App {
       this._handleApiError(e, "lock in");
     } finally {
       this._placingWrite = false;
-    }
-  }
-
-  // =================================================================
-  // Start Game + first-turn mode.
-  // =================================================================
-
-  _renderFirstModeButtons() {
-    if (this._firstModeGroup) return;
-
-    const W = Viewport.width;
-    const H = Viewport.height;
-
-    const panel = new Panel({
-      x: W / 2 - 280, y: H / 2 - 80,
-      w: 560, h: 160,
-      fill: "#0d1216",
-      stroke: "#3a4d70",
-      strokeWidth: 2,
-      radius: 8,
-    });
-
-    panel.add(new Text({
-      x: 280, y: 24,
-      text: "Who goes first?",
-      font: "bold 18px sans-serif",
-      color: "#d8e4f7",
-      align: "center",
-      baseline: "middle",
-    }));
-
-    panel.add(new Button({
-      x: 24, y: 90, w: 160, h: 48,
-      text: "Player 1",
-      fill: "#2a3552",
-      stroke: "#6a86b8",
-      strokeWidth: 2,
-      radius: 8,
-      textOptions: { font: "bold 16px sans-serif", color: "#ffffff" },
-      onClick: () => this._commitStart("p1"),
-    }));
-
-    panel.add(new Button({
-      x: 200, y: 90, w: 160, h: 48,
-      text: "Player 2",
-      fill: "#2a3552",
-      stroke: "#6a86b8",
-      strokeWidth: 2,
-      radius: 8,
-      textOptions: { font: "bold 16px sans-serif", color: "#ffffff" },
-      onClick: () => this._commitStart("p2"),
-    }));
-
-    panel.add(new Button({
-      x: 376, y: 90, w: 160, h: 48,
-      text: "Coinflip",
-      fill: "#2a3552",
-      stroke: "#6a86b8",
-      strokeWidth: 2,
-      radius: 8,
-      textOptions: { font: "bold 16px sans-serif", color: "#ffffff" },
-      onClick: () => this._commitStart("coin"),
-    }));
-
-    this.gameScreen.add(panel);
-    this._firstModeGroup = panel;
-  }
-
-  _hideFirstModeButtons() {
-    if (this._firstModeGroup) {
-      this.gameScreen.remove(this._firstModeGroup);
-      this._firstModeGroup = null;
-    }
-  }
-
-  async _commitStart(mode) {
-    if (this._startingGame) return;
-    this._startingGame = true;
-    this._hideFirstModeButtons();
-    this._setStatus("Starting...");
-
-    let first;
-    if (mode === "p1") first = 0;
-    else if (mode === "p2") first = 1;
-    else first = (Math.random() < 0.5 ? 0 : 1);
-
-    try {
-      await this._serialize(async () => {
-        const ctx = await this._fetchTreeContext();
-        const gamePath = DATA_ROOT + this.room + "/game.txt";
-        const entry = ctx.entries.get(gamePath);
-        let content = "";
-        if (entry) content = await this._readBlob(entry.sha);
-        const g = this._decodeGame(content);
-
-        if (g.started) {
-          this.game = g;
-          return;
-        }
-
-        g.started   = true;
-        g.turn      = first;
-        g.turnCount = (g.turnCount || 0) + 1;
-        g.winner    = null;
-        g.firstMode = mode;
-
-        const hint = {
-          commitSha: ctx.commitSha,
-          treeSha:   ctx.treeSha,
-          entries:   ctx.entries,
-          content:   content,
-        };
-
-        await this._writeWithRetry(
-          gamePath,
-          () => this._encodeGame(g),
-          "start " + this.username,
-          hint
-        );
-
-        this.game = g;
-      });
-
-      this._clearStatus();
-      this._renderAll();
-    } catch (e) {
-      this._handleApiError(e, "start game");
-    } finally {
-      this._startingGame = false;
+      this._busyEnd(this.lockBtn);
     }
   }
 
@@ -2070,21 +2270,61 @@ export class Battleship extends App {
     return hits >= total;
   }
 
-  async _fireAt(cx, cy) {
-    if (!this.game || !this.game.started) return;
-    if (this.game.winner != null) return;
-    if (this.game.turn !== this.slot) return;
-    if (this._awaitingFire) return;
+  // Lock or unlock the shot at the given cell. Same cell twice
+  // unlocks; a different cell re-locks on the new one. Only valid on
+  // your turn, only in the fire phase, only at cells not already
+  // fired at.
+  _lockShotAt(cx, cy) {
+    if (!this._canFireNow()) return;
 
-    const meKey  = "p" + this.slot;
-    const oppKey = "p" + (1 - this.slot);
-    const me     = this.game.players[meKey];
+    const meKey = "p" + this.slot;
+    const me    = this.game.players[meKey];
     if (!me) return;
 
     if (this._shotAt(me.shots || [], cx, cy)) return;
 
+    if (this.lockedShot && this.lockedShot.x === cx && this.lockedShot.y === cy) {
+      this.lockedShot = null;
+    } else {
+      this.lockedShot = { x: cx, y: cy };
+    }
+    this._renderAll();
+  }
+
+  _canFireNow() {
+    return this.game
+      && this.game.started
+      && this.game.winner == null
+      && this.game.turn === this.slot
+      && !this.placing
+      && !this._awaitingFire
+      && this._bothFleetsIn();
+  }
+
+  _bothFleetsIn() {
+    if (!this.game || !this.game.players) return false;
+    for (let p = 0; p < SLOTS; p++) {
+      const pl = this.game.players["p" + p];
+      if (!pl || !pl.fleet || pl.fleet.length !== FLEET.length) return false;
+    }
+    return true;
+  }
+
+  async _fireLockedShot() {
+    if (!this.lockedShot) return;
+    if (!this._canFireNow()) return;
+    if (this._firing) return;
+
+    const cx = this.lockedShot.x;
+    const cy = this.lockedShot.y;
+
+    this._firing = true;
     this._awaitingFire = true;
     this._setStatus("Firing...");
+    this._busyStart(this.fireBtn);
+
+    const meKey  = "p" + this.slot;
+    const oppKey = "p" + (1 - this.slot);
 
     try {
       await this._serialize(async () => {
@@ -2097,6 +2337,7 @@ export class Battleship extends App {
 
         if (g.turn !== this.slot || g.winner != null) {
           this.game = g;
+          this.lockedShot = null;
           return;
         }
 
@@ -2110,6 +2351,7 @@ export class Battleship extends App {
         if (!my.shots) my.shots = [];
         if (this._shotAt(my.shots, cx, cy)) {
           this.game = g;
+          this.lockedShot = null;
           return;
         }
 
@@ -2144,6 +2386,7 @@ export class Battleship extends App {
         );
 
         this.game = g;
+        this.lockedShot = null;
       });
 
       this._clearStatus();
@@ -2151,7 +2394,9 @@ export class Battleship extends App {
     } catch (e) {
       this._handleApiError(e, "fire");
     } finally {
+      this._firing = false;
       this._awaitingFire = false;
+      this._busyEnd(this.fireBtn);
     }
   }
 
@@ -2209,6 +2454,7 @@ export class Battleship extends App {
 
     this._sending  = true;
     this._lastSend = now;
+    this._busyStart(this.sendBtn);
 
     const safe = text.replace(/\|/g, "/").replace(/\n/g, " ").replace(/\r/g, " ");
     const iso  = nowIso();
@@ -2240,6 +2486,7 @@ export class Battleship extends App {
       setTimeout(() => this._clearStatus(), 3000);
     } finally {
       this._sending = false;
+      this._busyEnd(this.sendBtn);
     }
   }
 
@@ -2254,6 +2501,7 @@ export class Battleship extends App {
     this._renderMyBoard();
     this._renderOpBoard();
     this._renderButtons();
+    this._renderOutcomeBanner();
     this._renderUnreadBadge();
   }
 
@@ -2273,6 +2521,19 @@ export class Battleship extends App {
     if (!this.game.started) {
       const presentCount = this.presenceEntries.filter(e => e && isPresent(e.iso)).length;
       this.turnLabel.text = "Waiting for opponent (" + presentCount + "/2)";
+      this.feedbackLabel.text = "";
+      return;
+    }
+
+    // Started. Before both fleets are in, the "turn" label just tells
+    // the players what phase they are in.
+    if (!this._bothFleetsIn()) {
+      const me = this.game.players["p" + this.slot];
+      if (this._playerNeedsFleet()) {
+        this.turnLabel.text = "Place your fleet";
+      } else {
+        this.turnLabel.text = "Waiting for opponent to place";
+      }
       this.feedbackLabel.text = "";
       return;
     }
@@ -2368,24 +2629,31 @@ export class Battleship extends App {
       }
     }
 
-    const canFire = this.game
-      && this.game.started
-      && this.game.turn === this.slot
-      && this.game.winner == null
-      && !this.placing;
+    if (!this._canFireNow()) return;
 
-    if (canFire) {
-      const c = this.fireCursor;
+    // Locked-shot marker (solid), drawn under the cursor.
+    if (this.lockedShot) {
       this.opLayer.add(new Rect({
-        x: c.x * cell + 2,
-        y: c.y * cell + 2,
+        x: this.lockedShot.x * cell + 2,
+        y: this.lockedShot.y * cell + 2,
         w: cell - 4,
         h: cell - 4,
-        fill: null,
-        stroke: "#ffd060",
-        strokeWidth: 2,
+        fill: "#ffd060",
+        stroke: null,
       }));
     }
+
+    // Fire cursor outline at the current hover/cursor cell.
+    const c = this.fireCursor;
+    this.opLayer.add(new Rect({
+      x: c.x * cell + 2,
+      y: c.y * cell + 2,
+      w: cell - 4,
+      h: cell - 4,
+      fill: null,
+      stroke: "#ffd060",
+      strokeWidth: 2,
+    }));
   }
 
   _renderButtons() {
@@ -2394,15 +2662,99 @@ export class Battleship extends App {
 
     const g = this.game;
 
-    const showStart = g && !g.started && bothHere && !this.placing;
-    const showPlace = g && g.started && !this.placing && this._playerNeedsFleet();
-    const showPlaceCtl = this.placing;
+    const gameStarted = g && g.started;
+    const votePhase    = g && !g.started && bothHere;
+    const placeEntry   = gameStarted && !this.placing && this._playerNeedsFleet();
+    const placeCtl     = this.placing;
+    const firePhase    = this._canFireNow();
 
-    this.startBtn.visible = !!showStart;
-    this.placeBtn.visible = !!showPlace;
-    this.lockBtn.visible  = !!showPlaceCtl;
-    this.rotateBtn.visible = !!showPlaceCtl;
-    this.resetBtn.visible  = !!showPlaceCtl;
+    this.voteMeBtn.visible    = !!votePhase;
+    this.voteDeferBtn.visible = !!votePhase;
+    this.readyBtn.visible     = !!votePhase;
+
+    if (votePhase) {
+      // Vote buttons: highlight the current choice; both are still
+      // clickable until ready.
+      if (this.myVote === "me") {
+        this.voteMeBtn.self.fill    = "#2a6a3a";
+        this.voteMeBtn.self.stroke  = "#6aaa7a";
+      } else {
+        this.voteMeBtn.self.fill    = "#2a3552";
+        this.voteMeBtn.self.stroke  = "#6a86b8";
+      }
+      if (this.myVote === "defer") {
+        this.voteDeferBtn.self.fill    = "#2a6a3a";
+        this.voteDeferBtn.self.stroke  = "#6aaa7a";
+      } else {
+        this.voteDeferBtn.self.fill    = "#2a3552";
+        this.voteDeferBtn.self.stroke  = "#6a86b8";
+      }
+
+      // Ready is disabled (greyed, non-clickable in effect) until a
+      // vote has been made. Once ready, the button reads Unready and
+      // is red.
+      this.readyBtn.setText(this.myReady ? "Unready" : "Ready");
+
+      if (this.myReady) {
+        this.readyBtn.self.fill   = "#8a2020";
+        this.readyBtn.self.stroke = "#e06060";
+      } else if (this.myVote) {
+        this.readyBtn.self.fill   = "#2a6a3a";
+        this.readyBtn.self.stroke = "#6aaa7a";
+      } else {
+        this.readyBtn.self.fill   = "#3a3a3a";
+        this.readyBtn.self.stroke = "#5a5a5a";
+      }
+    }
+
+    this.placeBtn.visible = !!placeEntry;
+    this.lockBtn.visible  = !!placeCtl;
+    this.rotateBtn.visible = !!placeCtl;
+    this.resetBtn.visible  = !!placeCtl;
+
+    // Fire button: shown only when a shot is locked and it is your
+    // turn in the fire phase.
+    this.fireBtn.visible = !!(firePhase && this.lockedShot);
+  }
+
+  _renderOutcomeBanner() {
+    if (!this.outcomeLabel) return;
+
+    const g = this.game;
+    if (!g || !g.started) {
+      this.outcomeLabel.visible = false;
+      return;
+    }
+    if (this._bothFleetsIn()) {
+      this.outcomeLabel.visible = false;
+      return;
+    }
+
+    // Show the two votes and the resolved outcome until both fleets
+    // are in (i.e., until the fire phase is ready to begin).
+    const yourVote = this.myVote || (this.slot === 0 ? g.voteP0 : g.voteP1) || "?";
+    const theirVote = (this.slot === 0 ? g.voteP1 : g.voteP0) || "?";
+
+    const yourLabel  = yourVote === "me" ? "Me" : (yourVote === "defer" ? "Defer" : "?");
+    const theirLabel = theirVote === "me" ? "Me" : (theirVote === "defer" ? "Defer" : "?");
+
+    let outcomeText;
+    if (g.firstMode === "coin") {
+      outcomeText = "Coinflip";
+    } else if (g.firstMode === "p1") {
+      outcomeText = "Player 1 first";
+    } else if (g.firstMode === "p2") {
+      outcomeText = "Player 2 first";
+    } else {
+      outcomeText = "";
+    }
+
+    const whoGoesFirst = (g.turn === this.slot) ? "You go first" : "Opponent goes first";
+
+    this.outcomeLabel.text =
+      "You: " + yourLabel + "   Opponent: " + theirLabel +
+      "   ->   " + outcomeText + "  (" + whoGoesFirst + ")";
+    this.outcomeLabel.visible = true;
   }
 
   _playerNeedsFleet() {
@@ -2479,12 +2831,12 @@ export class Battleship extends App {
       return;
     }
 
-    if (this.game && this.game.started && this.game.winner == null) {
+    if (this._canFireNow()) {
       if (k === "ArrowLeft" || k === "a" || k === "A") { this.fireCursor.x = Math.max(0, this.fireCursor.x - 1); this._renderAll(); return; }
       if (k === "ArrowRight" || k === "d" || k === "D") { this.fireCursor.x = Math.min(BOARD_W - 1, this.fireCursor.x + 1); this._renderAll(); return; }
       if (k === "ArrowUp" || k === "w" || k === "W") { this.fireCursor.y = Math.max(0, this.fireCursor.y - 1); this._renderAll(); return; }
       if (k === "ArrowDown" || k === "s" || k === "S") { this.fireCursor.y = Math.min(BOARD_H - 1, this.fireCursor.y + 1); this._renderAll(); return; }
-      if (k === "Enter") { this._fireAt(this.fireCursor.x, this.fireCursor.y); return; }
+      if (k === "Enter") { this._lockShotAt(this.fireCursor.x, this.fireCursor.y); return; }
     }
   }
 
@@ -2498,7 +2850,7 @@ export class Battleship extends App {
       return;
     }
 
-    if (this.game && this.game.started && this.game.winner == null) {
+    if (this._canFireNow()) {
       const c = this._cellFromPoint(e.x, e.y, this._opBx, this._opBy);
       if (c) {
         this.fireCursor = c;
@@ -2516,10 +2868,10 @@ export class Battleship extends App {
       }
     }
 
-    if (this.game && this.game.started && this.game.winner == null) {
+    if (this._canFireNow()) {
       const c = this._cellFromPoint(e.x, e.y, this._opBx, this._opBy);
       if (c) {
-        this._fireAt(c.x, c.y);
+        this._lockShotAt(c.x, c.y);
         return;
       }
     }
