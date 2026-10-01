@@ -121,17 +121,18 @@ const BOARD_H = 10;
 
 // Busy-button colors. The helper swaps the self shape's fill and
 // stroke to the busy pair while a git request is in flight, and
-// restores the originals on completion. It also flips the Button's
-// own _busy flag so the composite's hover/press styling does not
-// overwrite the busy look.
+// locks the Button's own hover/press styling so a pointer wandering
+// over the button cannot undo the busy look. On completion the
+// Button re-applies its CURRENT base style, which is kept fresh by
+// _renderButtons via setBaseStyle.
 
 const BUSY_FILL   = "#4a4a4a";
 const BUSY_STROKE = "#9a9a9a";
 
 // Named resting colors for buttons whose base color changes with
-// state (vote, ready/unready). Applied via setBaseStyle so hover
-// and press merge over the CURRENT resting color instead of a
-// stale snapshot from construction time.
+// state (vote, ready/unready, lock in, fire). Applied via
+// setBaseStyle so hover and press merge over the CURRENT resting
+// color instead of a stale snapshot from construction time.
 
 const BTN_BLUE_FILL    = "#2a3552";
 const BTN_BLUE_STROKE  = "#6a86b8";
@@ -272,18 +273,16 @@ export class Battleship extends App {
 
   // ---------- Busy-button helper ----------
 
-  // Grey out a Button (fill and stroke) for the duration of a git
-  // request, and lock the Button's own hover/press styling so a
-  // pointer wandering over the button cannot undo the busy look.
-  // Originals are captured the first time the button goes busy and
-  // restored by _busyEnd. Local to this app.
+  // Grey a Button (fill and stroke) for the duration of a git
+  // request, and lock its hover/press styling so a pointer wandering
+  // over the button cannot undo the busy look. On completion the
+  // Button re-applies its CURRENT base style - which _renderButtons
+  // keeps fresh via setBaseStyle - so the button snaps straight to
+  // whatever resting color it should now have. No snapshot is
+  // captured or restored.
 
   _busyStart(btn) {
     if (!btn || !btn.self) return;
-    if (btn._busyBaseFill === undefined) {
-      btn._busyBaseFill   = btn.self.fill;
-      btn._busyBaseStroke = btn.self.stroke;
-    }
     btn.setBusy(true);
     btn.self.fill   = BUSY_FILL;
     btn.self.stroke = BUSY_STROKE;
@@ -291,11 +290,11 @@ export class Battleship extends App {
 
   _busyEnd(btn) {
     if (!btn || !btn.self) return;
-    if (btn._busyBaseFill !== undefined) {
-      btn.self.fill   = btn._busyBaseFill;
-      btn.self.stroke = btn._busyBaseStroke;
-    }
     btn.setBusy(false);
+    // Re-apply the current base style now. setBaseStyle({}) with no
+    // fields is a no-op update that still triggers the apply when
+    // the button is not busy.
+    btn.setBaseStyle({});
   }
 
   // ---------- Field rendering ----------
@@ -2057,8 +2056,6 @@ export class Battleship extends App {
     this._votingWrite = true;
     this._setStatus("Recording vote...");
 
-    // The button whose vote is being recorded goes busy grey while
-    // the write is in flight.
     const btn = (vote === "me") ? this.voteMeBtn : this.voteDeferBtn;
     this._busyStart(btn);
 
@@ -2101,8 +2098,6 @@ export class Battleship extends App {
       this._clearStatus();
       this._renderAll();
 
-      // Kick a cycle so the handshake can resolve without waiting
-      // for the next scheduled tick.
       this._kickCycle();
     } catch (e) {
       this._handleApiError(e, "vote");
@@ -2117,8 +2112,6 @@ export class Battleship extends App {
     if (!this.game) return;
     if (this.game.started) return;
 
-    // Ready requires a vote. Button is disabled (greyed) until a vote
-    // is in, so this guard is belt-and-braces.
     if (!this.myReady && !this.myVote) return;
 
     this._votingWrite = true;
@@ -2167,8 +2160,6 @@ export class Battleship extends App {
       this._clearStatus();
       this._renderAll();
 
-      // Kick a cycle so the handshake can resolve without waiting
-      // for the next scheduled tick.
       this._kickCycle();
     } catch (e) {
       this._handleApiError(e, "ready");
@@ -2257,8 +2248,23 @@ export class Battleship extends App {
     this._renderAll();
   }
 
+  // All FLEET ships placed (locally).
+  _allShipsPlaced() {
+    if (!this.myFleet) return false;
+    return this.myFleet.length === FLEET.length;
+  }
+
+  // This client has already locked its fleet in, and the on-disk game
+  // has a full fleet for this slot.
+  _iHaveLockedIn() {
+    if (!this.game || !this.game.players) return false;
+    const me = this.game.players["p" + this.slot];
+    if (!me || !me.fleet) return false;
+    return me.fleet.length === FLEET.length;
+  }
+
   async _lockIn() {
-    if (!this.myFleet || this.myFleet.length !== FLEET.length) return;
+    if (!this._allShipsPlaced()) return;
     if (this._placingWrite) return;
     this._placingWrite = true;
     this._setStatus("Locking in...");
@@ -2304,7 +2310,7 @@ export class Battleship extends App {
       await this._refreshGameMirror();
 
       this.placing = false;
-      this._setStatus("Locked in. Waiting for opponent.");
+      this._setStatus("");
       this._renderAll();
     } catch (e) {
       this._handleApiError(e, "lock in");
@@ -2342,16 +2348,6 @@ export class Battleship extends App {
     return hits >= total;
   }
 
-  // Lock or unlock the shot at the given cell.
-  //
-  // Two-click behavior after a lock:
-  //   - Click while a shot is locked  -> clear the lock. The cursor
-  //     outline reappears. No new shot is locked on this click.
-  //   - Click while no shot is locked -> lock the shot at the cursor.
-  //     The cursor outline disappears.
-  //
-  // The keyboard's Enter path on the fire cursor uses the exact same
-  // logic.
   _lockShotAt(cx, cy) {
     if (!this._canFireNow()) return;
 
@@ -2506,11 +2502,7 @@ export class Battleship extends App {
 
   _renderUnreadBadge() {
     if (!this.unreadBadge) return;
-    if (this.unread > 0) {
-      this.unreadBadge.text = "!";
-    } else {
-      this.unreadBadge.text = "";
-    }
+    this.unreadBadge.text = this.unread > 0 ? "!" : "";
   }
 
   async _sendChat() {
@@ -2601,12 +2593,18 @@ export class Battleship extends App {
       return;
     }
 
-    if (!this._bothFleetsIn()) {
-      if (this._playerNeedsFleet()) {
-        this.turnLabel.text = "Place your fleet";
-      } else {
-        this.turnLabel.text = "Waiting for opponent to lock in";
-      }
+    // Started. Header reflects the current phase for THIS player.
+    const iLocked  = this._iHaveLockedIn();
+    const bothLocked = this._bothFleetsIn();
+
+    if (!iLocked) {
+      this.turnLabel.text = "LOCK IN";
+      this.feedbackLabel.text = "";
+      return;
+    }
+
+    if (!bothLocked) {
+      this.turnLabel.text = "WAITING FOR OPPONENT";
       this.feedbackLabel.text = "";
       return;
     }
@@ -2736,20 +2734,16 @@ export class Battleship extends App {
 
     const gameStarted = g && g.started;
     const votePhase    = g && !g.started && bothHere;
-    const placeEntry   = gameStarted && !this.placing && this._playerNeedsFleet();
+    const placeEntry   = gameStarted && !this.placing && !this._iHaveLockedIn();
     const placeCtl     = this.placing;
     const firePhase    = this._canFireNow();
 
+    // Vote buttons.
     this.voteMeBtn.visible    = !!votePhase;
     this.voteDeferBtn.visible = !!votePhase;
     this.readyBtn.visible     = !!votePhase;
 
     if (votePhase) {
-      // Vote buttons. While ready, both are grey (persistent). While
-      // not ready, the chosen one is green and the other is blue.
-      // Apply via setBaseStyle so hover merges over the CURRENT
-      // resting color and does not revert to the old one.
-
       if (this.myReady) {
         this.voteMeBtn.setBaseStyle({ fill: BUSY_FILL, stroke: BUSY_STROKE });
         this.voteDeferBtn.setBaseStyle({ fill: BUSY_FILL, stroke: BUSY_STROKE });
@@ -2766,7 +2760,6 @@ export class Battleship extends App {
         }
       }
 
-      // Ready / Unready.
       this.readyBtn.setText(this.myReady ? "Unready" : "Ready");
 
       if (this.myReady) {
@@ -2778,10 +2771,35 @@ export class Battleship extends App {
       }
     }
 
+    // Place Ships entry button. Shown when this player has not yet
+    // locked in and is not currently in placement mode.
     this.placeBtn.visible = !!placeEntry;
-    this.lockBtn.visible  = !!placeCtl;
+
+    // Placement controls.
     this.rotateBtn.visible = !!placeCtl;
     this.resetBtn.visible  = !!placeCtl;
+
+    // Lock In. Visible during placement, and also while waiting for
+    // the opponent after this player has locked in (as a red
+    // "Locked In!").
+    this.lockBtn.visible = !!placeCtl || (gameStarted && this._iHaveLockedIn() && !this._bothFleetsIn());
+
+    if (this.lockBtn.visible) {
+      const placed  = this._allShipsPlaced();
+      const locked  = this._iHaveLockedIn();
+
+      if (locked) {
+        this.lockBtn.setText("Locked In!");
+        this.lockBtn.setBaseStyle({ fill: BTN_RED_FILL, stroke: BTN_RED_STROKE });
+      } else {
+        this.lockBtn.setText("Lock In");
+        if (placed) {
+          this.lockBtn.setBaseStyle({ fill: BTN_GREEN_FILL, stroke: BTN_GREEN_STROKE });
+        } else {
+          this.lockBtn.setBaseStyle({ fill: BUSY_FILL, stroke: BUSY_STROKE });
+        }
+      }
+    }
 
     this.fireBtn.visible = !!(firePhase && this.lockedShot);
   }
