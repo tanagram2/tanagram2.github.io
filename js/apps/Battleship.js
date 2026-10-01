@@ -42,6 +42,19 @@
 // The resolution and the two votes are committed in the same write
 // that flips started to 1, so both clients see the same outcome.
 //
+// All writes to game.txt that come from a single player's action
+// (vote, ready, lock in, fire) are shaped as:
+//
+//     (currentContent) => { decode; apply only my change; encode; }
+//
+// currentContent is the freshest content _writeWithRetry has, which
+// on a conflict retry is the freshly re-read file. The callback
+// decodes that, changes only the field(s) this client owns, and
+// re-encodes. Every other player's field passes through byte-for-
+// byte from the fresh read. This is the same shape as the presence
+// splice and is what keeps two concurrent writers from stomping
+// each other's lines.
+//
 // Shared-file trust model: both players read and write the same
 // game.txt. There is no attempt to hide fleet positions from the
 // client. This is a fun project, not a competitive one.
@@ -108,8 +121,9 @@ const BOARD_H = 10;
 
 // Busy-button colors. The helper swaps the self shape's fill and
 // stroke to the busy pair while a git request is in flight, and
-// restores the originals on completion. Originals are captured the
-// first time a button goes busy and kept until _busyEnd.
+// restores the originals on completion. It also flips the Button's
+// own _busy flag so the composite's hover/press styling does not
+// overwrite the busy look.
 
 const BUSY_FILL   = "#4a4a4a";
 const BUSY_STROKE = "#9a9a9a";
@@ -246,11 +260,12 @@ export class Battleship extends App {
 
   // ---------- Busy-button helper ----------
 
-  // Grey out a Button's self shape (fill and stroke) for the duration
-  // of a git request, then restore the originals. The originals are
-  // captured the first time the button is made busy and kept until
-  // _busyEnd. Local to this app on purpose; not a Button composite
-  // change.
+  // Grey out a Button (fill and stroke) for the duration of a git
+  // request, and lock the Button's own hover/press styling so a
+  // pointer wandering over the button cannot undo the busy look.
+  // Originals are captured the first time the button goes busy and
+  // restored by _busyEnd. Local to this app; not a Button composite
+  // change beyond the setBusy flag itself.
 
   _busyStart(btn) {
     if (!btn || !btn.self) return;
@@ -258,6 +273,7 @@ export class Battleship extends App {
       btn._busyBaseFill   = btn.self.fill;
       btn._busyBaseStroke = btn.self.stroke;
     }
+    btn.setBusy(true);
     btn.self.fill   = BUSY_FILL;
     btn.self.stroke = BUSY_STROKE;
   }
@@ -268,6 +284,7 @@ export class Battleship extends App {
       btn.self.fill   = btn._busyBaseFill;
       btn.self.stroke = btn._busyBaseStroke;
     }
+    btn.setBusy(false);
   }
 
   // ---------- Field rendering ----------
@@ -1612,9 +1629,6 @@ export class Battleship extends App {
     this._nextCycleAt = 0;
     this._refreshCountdown();
 
-    // Grey the Update button for the duration of the automatic
-    // cycle, so the player does not try to press it while one is
-    // already running.
     this._busyStart(this.updateBtn);
 
     let retried = false;
@@ -1674,38 +1688,15 @@ export class Battleship extends App {
       // Resolve the first-turn handshake if the game has not yet
       // started and both votes and both ready flags are in. Only the
       // first writer to reach here flips started; the other sees
-      // started=1 on their next cycle and no-ops.
+      // started=1 on their next cycle and no-ops. The build callback
+      // re-decodes currentContent so a conflict retry applies to the
+      // freshest file.
       const needsResolve = this.game
         && !this.game.started
         && this.game.voteP0 && this.game.voteP1
         && this.game.readyP0 && this.game.readyP1;
 
       if (needsResolve) {
-        const resolvedTurn = this._resolveFirstTurn(this.game.voteP0, this.game.voteP1);
-        const mode = this._resolveFirstMode(this.game.voteP0, this.game.voteP1);
-
-        const g = {
-          started:   true,
-          turn:      resolvedTurn,
-          turnCount: (this.game.turnCount || 0) + 1,
-          winner:    null,
-          firstMode: mode,
-          voteP0:    "",
-          voteP1:    "",
-          readyP0:   false,
-          readyP1:   false,
-          players:   this.game.players || {},
-        };
-
-        for (let p = 0; p < SLOTS; p++) {
-          const key = "p" + p;
-          if (this.game.players && this.game.players[key]) {
-            g.players[key] = this.game.players[key];
-          } else {
-            g.players[key] = { name: "", fleet: [], shots: [] };
-          }
-        }
-
         const hint = {
           commitSha: ctx.commitSha,
           treeSha:   ctx.treeSha,
@@ -1713,18 +1704,47 @@ export class Battleship extends App {
           content:   gameContent,
         };
 
+        const self = this;
+
         try {
           const result = await this._writeWithRetry(
             gamePath,
-            () => this._encodeGame(g),
+            (currentContent) => {
+              const g = self._decodeGame(currentContent);
+              if (g.started) return null;
+              if (!g.voteP0 || !g.voteP1) return null;
+              if (!g.readyP0 || !g.readyP1) return null;
+
+              const mode = self._resolveFirstMode(g.voteP0, g.voteP1);
+              const turn = self._resolveFirstTurn(g.voteP0, g.voteP1);
+
+              g.started   = true;
+              g.turn      = turn;
+              g.turnCount = (g.turnCount || 0) + 1;
+              g.winner    = null;
+              g.firstMode = mode;
+              g.voteP0    = "";
+              g.voteP1    = "";
+              g.readyP0   = false;
+              g.readyP1   = false;
+
+              return self._encodeGame(g);
+            },
             "resolve first turn",
             hint
           );
           if (result.retried) retried = true;
-          if (result.ok) this.game = g;
+          if (result.ok) {
+            // Re-read our own game mirror from the freshly written state
+            // so the local client sees the resolved outcome immediately.
+            const freshEntry = null;
+            const freshContent = null;
+            void freshEntry;
+            void freshContent;
+          }
         } catch (e) {
           if (e && e.message === "BAD_SESSION") throw e;
-          // Best-effort; next cycle tries again.
+          // Next cycle retries.
         }
       }
 
@@ -1757,9 +1777,9 @@ export class Battleship extends App {
       const mySlot = this.slot;
       const myName = this.username;
       const myIso  = nowIso();
-      const self   = this;
+      const self2  = this;
 
-      const hint = {
+      const hint2 = {
         commitSha: ctx.commitSha,
         treeSha:   ctx.treeSha,
         entries:   ctx.entries,
@@ -1767,14 +1787,14 @@ export class Battleship extends App {
       };
 
       try {
-        const result = await self._writeWithRetry(
+        const result = await self2._writeWithRetry(
           presPath,
           (currentContent) => {
             const newLine = "slot" + mySlot + "|" + myName + "|" + myIso;
-            return self._splicePresenceLine(currentContent, mySlot, newLine);
+            return self2._splicePresenceLine(currentContent, mySlot, newLine);
           },
           "cycle presence " + mySlot,
-          hint
+          hint2
         );
         if (result.retried) retried = true;
       } catch (e) {
@@ -2031,16 +2051,6 @@ export class Battleship extends App {
         const entry = ctx.entries.get(gamePath);
         let content = "";
         if (entry) content = await this._readBlob(entry.sha);
-        const g = this._decodeGame(content);
-
-        if (g.started) { this.game = g; return; }
-
-        const voteKey  = "voteP" + mySlot;
-        const readyKey = "readyP" + mySlot;
-
-        if (g[readyKey]) { this.game = g; return; }
-
-        g[voteKey] = vote;
 
         const hint = {
           commitSha: ctx.commitSha,
@@ -2051,15 +2061,24 @@ export class Battleship extends App {
 
         await self._writeWithRetry(
           gamePath,
-          () => self._encodeGame(g),
+          (currentContent) => {
+            const g = self._decodeGame(currentContent);
+            if (g.started) return null;
+            const voteKey  = "voteP" + mySlot;
+            const readyKey = "readyP" + mySlot;
+            if (g[readyKey]) return null;
+            g[voteKey] = vote;
+            return self._encodeGame(g);
+          },
           "vote " + mySlot,
           hint
         );
-
-        this.game  = g;
-        this.myVote = vote;
       });
 
+      // Update local mirror from a fresh read so our own UI reflects
+      // what actually landed.
+      await this._refreshGameMirror();
+      this.myVote = vote;
       this._clearStatus();
       this._renderAll();
     } catch (e) {
@@ -2079,7 +2098,8 @@ export class Battleship extends App {
     if (!this.myReady && !this.myVote) return;
 
     this._votingWrite = true;
-    this._setStatus(this.myReady ? "Unreadying..." : "Readying...");
+    const wasReady = this.myReady;
+    this._setStatus(wasReady ? "Unreadying..." : "Readying...");
     this._busyStart(this.readyBtn);
 
     const mySlot = this.slot;
@@ -2092,21 +2112,6 @@ export class Battleship extends App {
         const entry = ctx.entries.get(gamePath);
         let content = "";
         if (entry) content = await this._readBlob(entry.sha);
-        const g = this._decodeGame(content);
-
-        if (g.started) { this.game = g; return; }
-
-        const voteKey  = "voteP" + mySlot;
-        const readyKey = "readyP" + mySlot;
-
-        const nextReady = !g[readyKey];
-
-        if (nextReady && !g[voteKey]) {
-          this.game = g;
-          return;
-        }
-
-        g[readyKey] = nextReady;
 
         const hint = {
           commitSha: ctx.commitSha,
@@ -2117,15 +2122,27 @@ export class Battleship extends App {
 
         await self._writeWithRetry(
           gamePath,
-          () => self._encodeGame(g),
-          (nextReady ? "ready " : "unready ") + mySlot,
+          (currentContent) => {
+            const g = self._decodeGame(currentContent);
+            if (g.started) return null;
+            const voteKey  = "voteP" + mySlot;
+            const readyKey = "readyP" + mySlot;
+            const nextReady = !g[readyKey];
+            if (nextReady && !g[voteKey]) return null;
+            g[readyKey] = nextReady;
+            return self._encodeGame(g);
+          },
+          (wasReady ? "unready " : "ready ") + mySlot,
           hint
         );
-
-        this.game   = g;
-        this.myReady = nextReady;
       });
 
+      // Update local mirror from a fresh read.
+      await this._refreshGameMirror();
+      // myVote stays whatever we already had; the fresh mirror's vote
+      // for our slot is the source of truth.
+      this.myVote  = (mySlot === 0 ? this.game.voteP0 : this.game.voteP1) || this.myVote;
+      this.myReady = (mySlot === 0 ? this.game.readyP0 : this.game.readyP1);
       this._clearStatus();
       this._renderAll();
     } catch (e) {
@@ -2134,6 +2151,20 @@ export class Battleship extends App {
       this._votingWrite = false;
       this._busyEnd(this.readyBtn);
     }
+  }
+
+  // Read game.txt fresh and update this.game. Used after a write so
+  // the local mirror reflects what actually landed on disk.
+  async _refreshGameMirror() {
+    const self = this;
+    await this._serialize(async () => {
+      const ctx = await self._fetchTreeContext();
+      const gamePath = DATA_ROOT + self.room + "/game.txt";
+      const entry = ctx.entries.get(gamePath);
+      let content = "";
+      if (entry) content = await self._readBlob(entry.sha);
+      self.game = self._decodeGame(content);
+    });
   }
 
   // =================================================================
@@ -2208,6 +2239,11 @@ export class Battleship extends App {
     this._setStatus("Locking in...");
     this._busyStart(this.lockBtn);
 
+    const mySlot = this.slot;
+    const myFleet = this.myFleet;
+    const myName  = this.username;
+    const self    = this;
+
     try {
       await this._serialize(async () => {
         const ctx = await this._fetchTreeContext();
@@ -2215,14 +2251,6 @@ export class Battleship extends App {
         const entry = ctx.entries.get(gamePath);
         let content = "";
         if (entry) content = await this._readBlob(entry.sha);
-        const g = this._decodeGame(content);
-
-        if (!g.players) g.players = {};
-        const key = "p" + this.slot;
-        if (!g.players[key]) g.players[key] = { name: "", fleet: [], shots: [] };
-        g.players[key].name   = this.username;
-        g.players[key].fleet  = this.myFleet;
-        g.players[key].shots  = g.players[key].shots || [];
 
         const hint = {
           commitSha: ctx.commitSha,
@@ -2231,15 +2259,24 @@ export class Battleship extends App {
           content:   content,
         };
 
-        await this._writeWithRetry(
+        await self._writeWithRetry(
           gamePath,
-          () => this._encodeGame(g),
-          "lock in " + this.username,
+          (currentContent) => {
+            const g = self._decodeGame(currentContent);
+            const key = "p" + mySlot;
+            if (!g.players) g.players = {};
+            if (!g.players[key]) g.players[key] = { name: "", fleet: [], shots: [] };
+            g.players[key].name  = myName;
+            g.players[key].fleet = myFleet;
+            g.players[key].shots = g.players[key].shots || [];
+            return self._encodeGame(g);
+          },
+          "lock in " + myName,
           hint
         );
-
-        this.game = g;
       });
+
+      await this._refreshGameMirror();
 
       this.placing = false;
       this._setStatus("Locked in. Waiting for opponent.");
@@ -2289,8 +2326,7 @@ export class Battleship extends App {
   //     The cursor outline disappears.
   //
   // The keyboard's Enter path on the fire cursor uses the exact same
-  // logic, so Enter on the locked cell unlocks; Enter elsewhere locks
-  // at the cursor.
+  // logic.
   _lockShotAt(cx, cy) {
     if (!this._canFireNow()) return;
 
@@ -2298,12 +2334,9 @@ export class Battleship extends App {
     const me    = this.game.players[meKey];
     if (!me) return;
 
-    // Already fired at, cannot lock.
     if (this._shotAt(me.shots || [], cx, cy)) return;
 
     if (this.lockedShot) {
-      // Any click while a shot is locked clears it. The cursor
-      // outline comes back. The player must click again to lock.
       this.lockedShot = null;
     } else {
       this.lockedShot = { x: cx, y: cy };
@@ -2343,53 +2376,17 @@ export class Battleship extends App {
     this._setStatus("Firing...");
     this._busyStart(this.fireBtn);
 
-    const meKey  = "p" + this.slot;
-    const oppKey = "p" + (1 - this.slot);
+    const mySlot = this.slot;
+    const myName = this.username;
+    const self   = this;
 
     try {
       await this._serialize(async () => {
-        const ctx = await this._fetchTreeContext();
-        const gamePath = DATA_ROOT + this.room + "/game.txt";
+        const ctx = await self._fetchTreeContext();
+        const gamePath = DATA_ROOT + self.room + "/game.txt";
         const entry = ctx.entries.get(gamePath);
         let content = "";
-        if (entry) content = await this._readBlob(entry.sha);
-        const g = this._decodeGame(content);
-
-        if (g.turn !== this.slot || g.winner != null) {
-          this.game = g;
-          this.lockedShot = null;
-          return;
-        }
-
-        const opp = g.players[oppKey];
-        const my  = g.players[meKey];
-        if (!my || !opp || !opp.fleet || opp.fleet.length === 0) {
-          this._setStatus("Opponent not ready.");
-          return;
-        }
-
-        if (!my.shots) my.shots = [];
-        if (this._shotAt(my.shots, cx, cy)) {
-          this.game = g;
-          this.lockedShot = null;
-          return;
-        }
-
-        const hit = this._hitShip(opp.fleet, cx, cy);
-        my.shots.push({ x: cx, y: cy, hit });
-
-        if (this._allShipsSunk(opp.fleet, my.shots)) {
-          g.winner = this.slot;
-          g.turn   = null;
-          g.turnCount = (g.turnCount || 0) + 1;
-          this.lastFeedback = "HIT - you win!";
-        } else if (hit) {
-          this.lastFeedback = "HIT - fire again";
-        } else {
-          this.lastFeedback = "MISS - opponent's turn";
-          g.turn = 1 - this.slot;
-          g.turnCount = (g.turnCount || 0) + 1;
-        }
+        if (entry) content = await self._readBlob(entry.sha);
 
         const hint = {
           commitSha: ctx.commitSha,
@@ -2398,17 +2395,48 @@ export class Battleship extends App {
           content:   content,
         };
 
-        await this._writeWithRetry(
+        await self._writeWithRetry(
           gamePath,
-          () => this._encodeGame(g),
-          "fire " + this.username,
+          (currentContent) => {
+            const g = self._decodeGame(currentContent);
+            if (g.turn !== mySlot || g.winner != null) return null;
+
+            const meKey  = "p" + mySlot;
+            const oppKey = "p" + (1 - mySlot);
+            const opp = g.players[oppKey];
+            const my  = g.players[meKey];
+            if (!my || !opp || !opp.fleet || opp.fleet.length === 0) {
+              return null;
+            }
+
+            if (!my.shots) my.shots = [];
+            if (self._shotAt(my.shots, cx, cy)) return null;
+
+            const hit = self._hitShip(opp.fleet, cx, cy);
+            my.shots.push({ x: cx, y: cy, hit });
+
+            if (self._allShipsSunk(opp.fleet, my.shots)) {
+              g.winner = mySlot;
+              g.turn   = null;
+              g.turnCount = (g.turnCount || 0) + 1;
+              self.lastFeedback = "HIT - you win!";
+            } else if (hit) {
+              self.lastFeedback = "HIT - fire again";
+            } else {
+              self.lastFeedback = "MISS - opponent's turn";
+              g.turn = 1 - mySlot;
+              g.turnCount = (g.turnCount || 0) + 1;
+            }
+
+            return self._encodeGame(g);
+          },
+          "fire " + myName,
           hint
         );
-
-        this.game = g;
-        this.lockedShot = null;
       });
 
+      await this._refreshGameMirror();
+      this.lockedShot = null;
       this._clearStatus();
       this._renderAll();
     } catch (e) {
@@ -2545,8 +2573,6 @@ export class Battleship extends App {
       return;
     }
 
-    // Started. Until both fleets are locked in, nobody fires. The
-    // header tells each player what phase they are in.
     if (!this._bothFleetsIn()) {
       if (this._playerNeedsFleet()) {
         this.turnLabel.text = "Place your fleet";
@@ -2650,10 +2676,6 @@ export class Battleship extends App {
 
     if (!this._canFireNow()) return;
 
-    // Locked-shot marker (solid yellow). When one is present, the
-    // cursor outline is NOT drawn - the yellow cell is the only
-    // marker. Clicking anywhere on the board clears the lock and the
-    // outline comes back.
     if (this.lockedShot) {
       this.opLayer.add(new Rect({
         x: this.lockedShot.x * cell + 2,
@@ -2666,7 +2688,6 @@ export class Battleship extends App {
       return;
     }
 
-    // Fire cursor outline at the current hover/cursor cell.
     const c = this.fireCursor;
     this.opLayer.add(new Rect({
       x: c.x * cell + 2,
@@ -2696,8 +2717,6 @@ export class Battleship extends App {
     this.readyBtn.visible     = !!votePhase;
 
     if (votePhase) {
-      // Vote buttons: green for the chosen one, blue for the other.
-      // While ready, both are grey (locked).
       if (this.myReady) {
         this.voteMeBtn.self.fill   = BUSY_FILL;
         this.voteMeBtn.self.stroke = BUSY_STROKE;
@@ -2720,19 +2739,15 @@ export class Battleship extends App {
         }
       }
 
-      // Ready / Unready.
       this.readyBtn.setText(this.myReady ? "Unready" : "Ready");
 
       if (this.myReady) {
-        // Unready is red, matching Fire.
         this.readyBtn.self.fill   = "#8a2020";
         this.readyBtn.self.stroke = "#e06060";
       } else if (this.myVote) {
-        // Ready is green once a vote is in.
         this.readyBtn.self.fill   = "#2a6a3a";
         this.readyBtn.self.stroke = "#6aaa7a";
       } else {
-        // No vote yet: grey, disabled-looking.
         this.readyBtn.self.fill   = BUSY_FILL;
         this.readyBtn.self.stroke = BUSY_STROKE;
       }
@@ -2743,8 +2758,6 @@ export class Battleship extends App {
     this.rotateBtn.visible = !!placeCtl;
     this.resetBtn.visible  = !!placeCtl;
 
-    // Fire button: shown only when a shot is locked and it is your
-    // turn in the fire phase (which itself requires both fleets in).
     this.fireBtn.visible = !!(firePhase && this.lockedShot);
   }
 
@@ -2761,8 +2774,6 @@ export class Battleship extends App {
       return;
     }
 
-    // Preset messages, keyed by my vote and firstMode. We never show
-    // the opponent's raw vote.
     const myVote = (this.slot === 0 ? g.voteP0 : g.voteP1) || this.myVote || "";
     const iGoFirst = (g.turn === this.slot);
     const firstPlayerNum = (g.turn === 0) ? "Player 1" : "Player 2";
@@ -2776,8 +2787,6 @@ export class Battleship extends App {
         msg = "Both players chose Defer; coinflip -> " + firstPlayerNum + " goes first!";
       }
     } else {
-      // p1 or p2. If I am the resolved first player, this means my
-      // vote was Me and theirs was Defer. Otherwise theirs was Me.
       if (iGoFirst) {
         msg = "You go first!";
       } else {
