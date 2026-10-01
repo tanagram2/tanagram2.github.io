@@ -106,12 +106,13 @@ const FLEET = [
 const BOARD_W = 10;
 const BOARD_H = 10;
 
-// Busy-button colors. The helper swaps the self shape's fill to BUSY
-// while a git request is in flight, and restores the original fill on
-// completion. The original is captured the first time a button goes
-// busy and kept until the button is done.
+// Busy-button colors. The helper swaps the self shape's fill and
+// stroke to the busy pair while a git request is in flight, and
+// restores the originals on completion. Originals are captured the
+// first time a button goes busy and kept until _busyEnd.
 
-const BUSY_FILL = "#444a52";
+const BUSY_FILL   = "#4a4a4a";
+const BUSY_STROKE = "#9a9a9a";
 
 // base64 helpers. The browser's btoa/atob mishandle non-ASCII.
 
@@ -245,23 +246,27 @@ export class Battleship extends App {
 
   // ---------- Busy-button helper ----------
 
-  // Grey out a Button's self shape for the duration of a git request,
-  // then restore its original fill. The original fill is captured the
-  // first time the button is made busy and kept until _busyEnd. Local
-  // to this app on purpose; not a Button composite change.
+  // Grey out a Button's self shape (fill and stroke) for the duration
+  // of a git request, then restore the originals. The originals are
+  // captured the first time the button is made busy and kept until
+  // _busyEnd. Local to this app on purpose; not a Button composite
+  // change.
 
   _busyStart(btn) {
     if (!btn || !btn.self) return;
     if (btn._busyBaseFill === undefined) {
-      btn._busyBaseFill = btn.self.fill;
+      btn._busyBaseFill   = btn.self.fill;
+      btn._busyBaseStroke = btn.self.stroke;
     }
-    btn.self.fill = BUSY_FILL;
+    btn.self.fill   = BUSY_FILL;
+    btn.self.stroke = BUSY_STROKE;
   }
 
   _busyEnd(btn) {
     if (!btn || !btn.self) return;
     if (btn._busyBaseFill !== undefined) {
-      btn.self.fill = btn._busyBaseFill;
+      btn.self.fill   = btn._busyBaseFill;
+      btn.self.stroke = btn._busyBaseStroke;
     }
   }
 
@@ -777,7 +782,7 @@ export class Battleship extends App {
     screen.add(this.fireBtn);
 
     // Vote outcome banner. Shown once both players are ready, until
-    // the game reaches the fire phase.
+    // both fleets are locked in.
     this.outcomeLabel = new Text({
       x: W / 2,
       y: H - 96,
@@ -1607,15 +1612,23 @@ export class Battleship extends App {
     this._nextCycleAt = 0;
     this._refreshCountdown();
 
+    // Grey the Update button for the duration of the automatic
+    // cycle, so the player does not try to press it while one is
+    // already running.
+    this._busyStart(this.updateBtn);
+
     let retried = false;
     try {
       retried = await this._cycle();
     } catch (e) {
       if (e && e.message === "BAD_SESSION") {
+        this._busyEnd(this.updateBtn);
         this._handleApiError(e, "cycle");
         return;
       }
     }
+
+    this._busyEnd(this.updateBtn);
 
     if (retried) {
       const nudge = STAGGER_MIN_MS + Math.floor(Math.random() * (STAGGER_MAX_MS - STAGGER_MIN_MS));
@@ -1684,7 +1697,6 @@ export class Battleship extends App {
           players:   this.game.players || {},
         };
 
-        // Keep the existing per-player blocks (name, fleet, shots).
         for (let p = 0; p < SLOTS; p++) {
           const key = "p" + p;
           if (this.game.players && this.game.players[key]) {
@@ -2090,8 +2102,6 @@ export class Battleship extends App {
         const nextReady = !g[readyKey];
 
         if (nextReady && !g[voteKey]) {
-          // Should not happen given the button is disabled, but do
-          // not write an inconsistent state.
           this.game = g;
           return;
         }
@@ -2270,10 +2280,17 @@ export class Battleship extends App {
     return hits >= total;
   }
 
-  // Lock or unlock the shot at the given cell. Same cell twice
-  // unlocks; a different cell re-locks on the new one. Only valid on
-  // your turn, only in the fire phase, only at cells not already
-  // fired at.
+  // Lock or unlock the shot at the given cell.
+  //
+  // Two-click behavior after a lock:
+  //   - Click while a shot is locked  -> clear the lock. The cursor
+  //     outline reappears. No new shot is locked on this click.
+  //   - Click while no shot is locked -> lock the shot at the cursor.
+  //     The cursor outline disappears.
+  //
+  // The keyboard's Enter path on the fire cursor uses the exact same
+  // logic, so Enter on the locked cell unlocks; Enter elsewhere locks
+  // at the cursor.
   _lockShotAt(cx, cy) {
     if (!this._canFireNow()) return;
 
@@ -2281,9 +2298,12 @@ export class Battleship extends App {
     const me    = this.game.players[meKey];
     if (!me) return;
 
+    // Already fired at, cannot lock.
     if (this._shotAt(me.shots || [], cx, cy)) return;
 
-    if (this.lockedShot && this.lockedShot.x === cx && this.lockedShot.y === cy) {
+    if (this.lockedShot) {
+      // Any click while a shot is locked clears it. The cursor
+      // outline comes back. The player must click again to lock.
       this.lockedShot = null;
     } else {
       this.lockedShot = { x: cx, y: cy };
@@ -2525,14 +2545,13 @@ export class Battleship extends App {
       return;
     }
 
-    // Started. Before both fleets are in, the "turn" label just tells
-    // the players what phase they are in.
+    // Started. Until both fleets are locked in, nobody fires. The
+    // header tells each player what phase they are in.
     if (!this._bothFleetsIn()) {
-      const me = this.game.players["p" + this.slot];
       if (this._playerNeedsFleet()) {
         this.turnLabel.text = "Place your fleet";
       } else {
-        this.turnLabel.text = "Waiting for opponent to place";
+        this.turnLabel.text = "Waiting for opponent to lock in";
       }
       this.feedbackLabel.text = "";
       return;
@@ -2631,7 +2650,10 @@ export class Battleship extends App {
 
     if (!this._canFireNow()) return;
 
-    // Locked-shot marker (solid), drawn under the cursor.
+    // Locked-shot marker (solid yellow). When one is present, the
+    // cursor outline is NOT drawn - the yellow cell is the only
+    // marker. Clicking anywhere on the board clears the lock and the
+    // outline comes back.
     if (this.lockedShot) {
       this.opLayer.add(new Rect({
         x: this.lockedShot.x * cell + 2,
@@ -2641,6 +2663,7 @@ export class Battleship extends App {
         fill: "#ffd060",
         stroke: null,
       }));
+      return;
     }
 
     // Fire cursor outline at the current hover/cursor cell.
@@ -2673,37 +2696,45 @@ export class Battleship extends App {
     this.readyBtn.visible     = !!votePhase;
 
     if (votePhase) {
-      // Vote buttons: highlight the current choice; both are still
-      // clickable until ready.
-      if (this.myVote === "me") {
-        this.voteMeBtn.self.fill    = "#2a6a3a";
-        this.voteMeBtn.self.stroke  = "#6aaa7a";
+      // Vote buttons: green for the chosen one, blue for the other.
+      // While ready, both are grey (locked).
+      if (this.myReady) {
+        this.voteMeBtn.self.fill   = BUSY_FILL;
+        this.voteMeBtn.self.stroke = BUSY_STROKE;
+        this.voteDeferBtn.self.fill   = BUSY_FILL;
+        this.voteDeferBtn.self.stroke = BUSY_STROKE;
       } else {
-        this.voteMeBtn.self.fill    = "#2a3552";
-        this.voteMeBtn.self.stroke  = "#6a86b8";
-      }
-      if (this.myVote === "defer") {
-        this.voteDeferBtn.self.fill    = "#2a6a3a";
-        this.voteDeferBtn.self.stroke  = "#6aaa7a";
-      } else {
-        this.voteDeferBtn.self.fill    = "#2a3552";
-        this.voteDeferBtn.self.stroke  = "#6a86b8";
+        if (this.myVote === "me") {
+          this.voteMeBtn.self.fill    = "#2a6a3a";
+          this.voteMeBtn.self.stroke  = "#6aaa7a";
+        } else {
+          this.voteMeBtn.self.fill    = "#2a3552";
+          this.voteMeBtn.self.stroke  = "#6a86b8";
+        }
+        if (this.myVote === "defer") {
+          this.voteDeferBtn.self.fill    = "#2a6a3a";
+          this.voteDeferBtn.self.stroke  = "#6aaa7a";
+        } else {
+          this.voteDeferBtn.self.fill    = "#2a3552";
+          this.voteDeferBtn.self.stroke  = "#6a86b8";
+        }
       }
 
-      // Ready is disabled (greyed, non-clickable in effect) until a
-      // vote has been made. Once ready, the button reads Unready and
-      // is red.
+      // Ready / Unready.
       this.readyBtn.setText(this.myReady ? "Unready" : "Ready");
 
       if (this.myReady) {
+        // Unready is red, matching Fire.
         this.readyBtn.self.fill   = "#8a2020";
         this.readyBtn.self.stroke = "#e06060";
       } else if (this.myVote) {
+        // Ready is green once a vote is in.
         this.readyBtn.self.fill   = "#2a6a3a";
         this.readyBtn.self.stroke = "#6aaa7a";
       } else {
-        this.readyBtn.self.fill   = "#3a3a3a";
-        this.readyBtn.self.stroke = "#5a5a5a";
+        // No vote yet: grey, disabled-looking.
+        this.readyBtn.self.fill   = BUSY_FILL;
+        this.readyBtn.self.stroke = BUSY_STROKE;
       }
     }
 
@@ -2713,7 +2744,7 @@ export class Battleship extends App {
     this.resetBtn.visible  = !!placeCtl;
 
     // Fire button: shown only when a shot is locked and it is your
-    // turn in the fire phase.
+    // turn in the fire phase (which itself requires both fleets in).
     this.fireBtn.visible = !!(firePhase && this.lockedShot);
   }
 
@@ -2730,30 +2761,31 @@ export class Battleship extends App {
       return;
     }
 
-    // Show the two votes and the resolved outcome until both fleets
-    // are in (i.e., until the fire phase is ready to begin).
-    const yourVote = this.myVote || (this.slot === 0 ? g.voteP0 : g.voteP1) || "?";
-    const theirVote = (this.slot === 0 ? g.voteP1 : g.voteP0) || "?";
+    // Preset messages, keyed by my vote and firstMode. We never show
+    // the opponent's raw vote.
+    const myVote = (this.slot === 0 ? g.voteP0 : g.voteP1) || this.myVote || "";
+    const iGoFirst = (g.turn === this.slot);
+    const firstPlayerNum = (g.turn === 0) ? "Player 1" : "Player 2";
 
-    const yourLabel  = yourVote === "me" ? "Me" : (yourVote === "defer" ? "Defer" : "?");
-    const theirLabel = theirVote === "me" ? "Me" : (theirVote === "defer" ? "Defer" : "?");
+    let msg = "";
 
-    let outcomeText;
     if (g.firstMode === "coin") {
-      outcomeText = "Coinflip";
-    } else if (g.firstMode === "p1") {
-      outcomeText = "Player 1 first";
-    } else if (g.firstMode === "p2") {
-      outcomeText = "Player 2 first";
+      if (myVote === "me") {
+        msg = "Both players chose Me; coinflip -> " + firstPlayerNum + " goes first!";
+      } else {
+        msg = "Both players chose Defer; coinflip -> " + firstPlayerNum + " goes first!";
+      }
     } else {
-      outcomeText = "";
+      // p1 or p2. If I am the resolved first player, this means my
+      // vote was Me and theirs was Defer. Otherwise theirs was Me.
+      if (iGoFirst) {
+        msg = "You go first!";
+      } else {
+        msg = firstPlayerNum + " goes first!";
+      }
     }
 
-    const whoGoesFirst = (g.turn === this.slot) ? "You go first" : "Opponent goes first";
-
-    this.outcomeLabel.text =
-      "You: " + yourLabel + "   Opponent: " + theirLabel +
-      "   ->   " + outcomeText + "  (" + whoGoesFirst + ")";
+    this.outcomeLabel.text = msg;
     this.outcomeLabel.visible = true;
   }
 
