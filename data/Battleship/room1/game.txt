@@ -1,13 +1,13 @@
 #META
 started=1
-turn=0
-turnCount=1
+turn=1
+turnCount=2
 winner=-1
 firstMode=p1
 #PLAYER 0
 name=tanagram
 fleet=1,2:1,3:1,4:1,5:1,6;3,2:3,3:3,4:3,5;5,2:5,3:5,4;7,2:7,3:7,4;6,7:6,8
-shots=
+shots=2,2,0
 #PLAYER 1
 name=motivator
 fleet=1,2:1,3:1,4:1,5:1,6;3,2:3,3:3,4:3,5;5,2:5,3:5,4;7,2:7,3:7,4;4,7:4,8
