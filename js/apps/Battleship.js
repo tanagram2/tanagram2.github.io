@@ -128,6 +128,18 @@ const BOARD_H = 10;
 const BUSY_FILL   = "#4a4a4a";
 const BUSY_STROKE = "#9a9a9a";
 
+// Named resting colors for buttons whose base color changes with
+// state (vote, ready/unready). Applied via setBaseStyle so hover
+// and press merge over the CURRENT resting color instead of a
+// stale snapshot from construction time.
+
+const BTN_BLUE_FILL    = "#2a3552";
+const BTN_BLUE_STROKE  = "#6a86b8";
+const BTN_GREEN_FILL   = "#2a6a3a";
+const BTN_GREEN_STROKE = "#6aaa7a";
+const BTN_RED_FILL     = "#8a2020";
+const BTN_RED_STROKE   = "#e06060";
+
 // base64 helpers. The browser's btoa/atob mishandle non-ASCII.
 
 function toBase64(str) {
@@ -264,8 +276,7 @@ export class Battleship extends App {
   // request, and lock the Button's own hover/press styling so a
   // pointer wandering over the button cannot undo the busy look.
   // Originals are captured the first time the button goes busy and
-  // restored by _busyEnd. Local to this app; not a Button composite
-  // change beyond the setBusy flag itself.
+  // restored by _busyEnd. Local to this app.
 
   _busyStart(btn) {
     if (!btn || !btn.self) return;
@@ -692,8 +703,8 @@ export class Battleship extends App {
     this.voteMeBtn = new Button({
       x: W / 2 - 310, y: actionY, w: 200, h: 52,
       text: "Me",
-      fill: "#2a3552",
-      stroke: "#6a86b8",
+      fill: BTN_BLUE_FILL,
+      stroke: BTN_BLUE_STROKE,
       strokeWidth: 2,
       radius: 8,
       textOptions: { font: "bold 18px sans-serif", color: "#ffffff" },
@@ -705,8 +716,8 @@ export class Battleship extends App {
     this.voteDeferBtn = new Button({
       x: W / 2 - 100, y: actionY, w: 200, h: 52,
       text: "Defer",
-      fill: "#2a3552",
-      stroke: "#6a86b8",
+      fill: BTN_BLUE_FILL,
+      stroke: BTN_BLUE_STROKE,
       strokeWidth: 2,
       radius: 8,
       textOptions: { font: "bold 18px sans-serif", color: "#ffffff" },
@@ -719,8 +730,8 @@ export class Battleship extends App {
     this.readyBtn = new Button({
       x: W / 2 + 110, y: actionY, w: 200, h: 52,
       text: "Ready",
-      fill: "#2a6a3a",
-      stroke: "#6aaa7a",
+      fill: BTN_GREEN_FILL,
+      stroke: BTN_GREEN_STROKE,
       strokeWidth: 2,
       radius: 8,
       textOptions: { font: "bold 18px sans-serif", color: "#ffffff" },
@@ -788,8 +799,8 @@ export class Battleship extends App {
     this.fireBtn = new Button({
       x: W / 2 - 110, y: actionY, w: 220, h: 52,
       text: "Fire!",
-      fill: "#8a2020",
-      stroke: "#e06060",
+      fill: BTN_RED_FILL,
+      stroke: BTN_RED_STROKE,
       strokeWidth: 2,
       radius: 8,
       textOptions: { font: "bold 22px sans-serif", color: "#ffffff" },
@@ -1623,6 +1634,19 @@ export class Battleship extends App {
     this._refreshCountdown();
   }
 
+  // Force a cycle to run right now, cancelling the pending timer.
+  // Used after a successful vote or ready write so the handshake
+  // resolves without waiting up to a full cycle interval. One extra
+  // cycle per explicit user action; bounded by clicks.
+  _kickCycle() {
+    if (this.room === null) return;
+    if (this._cycleTimer) {
+      clearTimeout(this._cycleTimer);
+      this._cycleTimer = null;
+    }
+    this._runCycleLoop();
+  }
+
   async _runCycleLoop() {
     if (this.room === null) return;
 
@@ -1734,14 +1758,6 @@ export class Battleship extends App {
             hint
           );
           if (result.retried) retried = true;
-          if (result.ok) {
-            // Re-read our own game mirror from the freshly written state
-            // so the local client sees the resolved outcome immediately.
-            const freshEntry = null;
-            const freshContent = null;
-            void freshEntry;
-            void freshContent;
-          }
         } catch (e) {
           if (e && e.message === "BAD_SESSION") throw e;
           // Next cycle retries.
@@ -2041,16 +2057,21 @@ export class Battleship extends App {
     this._votingWrite = true;
     this._setStatus("Recording vote...");
 
+    // The button whose vote is being recorded goes busy grey while
+    // the write is in flight.
+    const btn = (vote === "me") ? this.voteMeBtn : this.voteDeferBtn;
+    this._busyStart(btn);
+
     const mySlot = this.slot;
     const self   = this;
 
     try {
       await this._serialize(async () => {
-        const ctx = await this._fetchTreeContext();
-        const gamePath = DATA_ROOT + this.room + "/game.txt";
+        const ctx = await self._fetchTreeContext();
+        const gamePath = DATA_ROOT + self.room + "/game.txt";
         const entry = ctx.entries.get(gamePath);
         let content = "";
-        if (entry) content = await this._readBlob(entry.sha);
+        if (entry) content = await self._readBlob(entry.sha);
 
         const hint = {
           commitSha: ctx.commitSha,
@@ -2075,16 +2096,19 @@ export class Battleship extends App {
         );
       });
 
-      // Update local mirror from a fresh read so our own UI reflects
-      // what actually landed.
       await this._refreshGameMirror();
       this.myVote = vote;
       this._clearStatus();
       this._renderAll();
+
+      // Kick a cycle so the handshake can resolve without waiting
+      // for the next scheduled tick.
+      this._kickCycle();
     } catch (e) {
       this._handleApiError(e, "vote");
     } finally {
       this._votingWrite = false;
+      this._busyEnd(btn);
     }
   }
 
@@ -2107,11 +2131,11 @@ export class Battleship extends App {
 
     try {
       await this._serialize(async () => {
-        const ctx = await this._fetchTreeContext();
-        const gamePath = DATA_ROOT + this.room + "/game.txt";
+        const ctx = await self._fetchTreeContext();
+        const gamePath = DATA_ROOT + self.room + "/game.txt";
         const entry = ctx.entries.get(gamePath);
         let content = "";
-        if (entry) content = await this._readBlob(entry.sha);
+        if (entry) content = await self._readBlob(entry.sha);
 
         const hint = {
           commitSha: ctx.commitSha,
@@ -2137,14 +2161,15 @@ export class Battleship extends App {
         );
       });
 
-      // Update local mirror from a fresh read.
       await this._refreshGameMirror();
-      // myVote stays whatever we already had; the fresh mirror's vote
-      // for our slot is the source of truth.
       this.myVote  = (mySlot === 0 ? this.game.voteP0 : this.game.voteP1) || this.myVote;
       this.myReady = (mySlot === 0 ? this.game.readyP0 : this.game.readyP1);
       this._clearStatus();
       this._renderAll();
+
+      // Kick a cycle so the handshake can resolve without waiting
+      // for the next scheduled tick.
+      this._kickCycle();
     } catch (e) {
       this._handleApiError(e, "ready");
     } finally {
@@ -2246,11 +2271,11 @@ export class Battleship extends App {
 
     try {
       await this._serialize(async () => {
-        const ctx = await this._fetchTreeContext();
-        const gamePath = DATA_ROOT + this.room + "/game.txt";
+        const ctx = await self._fetchTreeContext();
+        const gamePath = DATA_ROOT + self.room + "/game.txt";
         const entry = ctx.entries.get(gamePath);
         let content = "";
-        if (entry) content = await this._readBlob(entry.sha);
+        if (entry) content = await self._readBlob(entry.sha);
 
         const hint = {
           commitSha: ctx.commitSha,
@@ -2374,6 +2399,8 @@ export class Battleship extends App {
     this._firing = true;
     this._awaitingFire = true;
     this._setStatus("Firing...");
+    this.lastFeedback = "Firing...";
+    this._renderAll();
     this._busyStart(this.fireBtn);
 
     const mySlot = this.slot;
@@ -2440,6 +2467,7 @@ export class Battleship extends App {
       this._clearStatus();
       this._renderAll();
     } catch (e) {
+      this.lastFeedback = "";
       this._handleApiError(e, "fire");
     } finally {
       this._firing = false;
@@ -2717,39 +2745,36 @@ export class Battleship extends App {
     this.readyBtn.visible     = !!votePhase;
 
     if (votePhase) {
+      // Vote buttons. While ready, both are grey (persistent). While
+      // not ready, the chosen one is green and the other is blue.
+      // Apply via setBaseStyle so hover merges over the CURRENT
+      // resting color and does not revert to the old one.
+
       if (this.myReady) {
-        this.voteMeBtn.self.fill   = BUSY_FILL;
-        this.voteMeBtn.self.stroke = BUSY_STROKE;
-        this.voteDeferBtn.self.fill   = BUSY_FILL;
-        this.voteDeferBtn.self.stroke = BUSY_STROKE;
+        this.voteMeBtn.setBaseStyle({ fill: BUSY_FILL, stroke: BUSY_STROKE });
+        this.voteDeferBtn.setBaseStyle({ fill: BUSY_FILL, stroke: BUSY_STROKE });
       } else {
         if (this.myVote === "me") {
-          this.voteMeBtn.self.fill    = "#2a6a3a";
-          this.voteMeBtn.self.stroke  = "#6aaa7a";
+          this.voteMeBtn.setBaseStyle({ fill: BTN_GREEN_FILL, stroke: BTN_GREEN_STROKE });
         } else {
-          this.voteMeBtn.self.fill    = "#2a3552";
-          this.voteMeBtn.self.stroke  = "#6a86b8";
+          this.voteMeBtn.setBaseStyle({ fill: BTN_BLUE_FILL, stroke: BTN_BLUE_STROKE });
         }
         if (this.myVote === "defer") {
-          this.voteDeferBtn.self.fill    = "#2a6a3a";
-          this.voteDeferBtn.self.stroke  = "#6aaa7a";
+          this.voteDeferBtn.setBaseStyle({ fill: BTN_GREEN_FILL, stroke: BTN_GREEN_STROKE });
         } else {
-          this.voteDeferBtn.self.fill    = "#2a3552";
-          this.voteDeferBtn.self.stroke  = "#6a86b8";
+          this.voteDeferBtn.setBaseStyle({ fill: BTN_BLUE_FILL, stroke: BTN_BLUE_STROKE });
         }
       }
 
+      // Ready / Unready.
       this.readyBtn.setText(this.myReady ? "Unready" : "Ready");
 
       if (this.myReady) {
-        this.readyBtn.self.fill   = "#8a2020";
-        this.readyBtn.self.stroke = "#e06060";
+        this.readyBtn.setBaseStyle({ fill: BTN_RED_FILL, stroke: BTN_RED_STROKE });
       } else if (this.myVote) {
-        this.readyBtn.self.fill   = "#2a6a3a";
-        this.readyBtn.self.stroke = "#6aaa7a";
+        this.readyBtn.setBaseStyle({ fill: BTN_GREEN_FILL, stroke: BTN_GREEN_STROKE });
       } else {
-        this.readyBtn.self.fill   = BUSY_FILL;
-        this.readyBtn.self.stroke = BUSY_STROKE;
+        this.readyBtn.setBaseStyle({ fill: BUSY_FILL, stroke: BUSY_STROKE });
       }
     }
 

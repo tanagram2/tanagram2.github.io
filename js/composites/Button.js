@@ -16,6 +16,15 @@
 // what "busy" should look like); Button only refuses to overwrite
 // it.
 //
+// Base style: _baseStyle is a snapshot of the self shape taken at
+// construction time, and hover/press styles merge over it. If an
+// app changes the button's RESTING color (for example, flipping a
+// button from green "Ready" to red "Unready"), the app must call
+// setBaseStyle with the new values. Otherwise the next hover will
+// merge over the old snapshot and the old resting color will come
+// back. setBaseStyle updates the snapshot and, if the button is not
+// busy, re-applies it now.
+//
 // Style merging: hoverStyle and pressStyle are merged OVER the base
 // style, same convention as textOptions merging over default text
 // options. A caller passing hoverStyle: { fill: "#5aa85a" } overrides
@@ -40,8 +49,10 @@ export class Button extends Composite {
       radius:      opts.radius      ?? 0,
     });
 
-    // Only the fields Button itself mutates. Kept symmetric with
-    // _applyStyle so capture/restore stay in lockstep.
+    // Snapshot of the fields Button itself mutates. Kept symmetric
+    // with _applyStyle so capture/restore stay in lockstep. An app
+    // that changes the resting color calls setBaseStyle to refresh
+    // this snapshot.
     this._baseStyle = this._captureStyle();
 
     this._hoverStyle = opts.hoverStyle ?? null;
@@ -97,6 +108,32 @@ export class Button extends Composite {
 
   isBusy() {
     return this._busy;
+  }
+
+  // Change the button's RESTING style. Call this whenever the app
+  // changes the button's base color (for example, flipping Ready
+  // to Unready). Without it, the next hover would merge over the
+  // stale snapshot and the old resting color would reappear.
+  //
+  // Accepts a partial style object with any of fill, stroke,
+  // strokeWidth, radius. Missing fields keep their current snapshot
+  // values.
+  //
+  // If the button is not busy, the new base style is applied to the
+  // self shape now, so the button's resting look updates immediately
+  // even without a hover.
+  setBaseStyle(style) {
+    if (!style) return this;
+
+    if ("fill"        in style) this._baseStyle.fill        = style.fill;
+    if ("stroke"      in style) this._baseStyle.stroke      = style.stroke;
+    if ("strokeWidth" in style) this._baseStyle.strokeWidth = style.strokeWidth;
+    if ("radius"      in style) this._baseStyle.radius      = style.radius;
+
+    if (!this._busy) {
+      this._applyStyle(this._baseStyle);
+    }
+    return this;
   }
 
   _captureStyle() {
