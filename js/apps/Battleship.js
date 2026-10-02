@@ -56,10 +56,11 @@
 // each other's lines.
 //
 // Mobile pass: the layout branches on Viewport.isMobile. Boards
-// stack vertically. Placement and firing use tap+drag on the board
-// plus an optional on-screen D-pad for firing. Chat opens as a full
-// overlay that covers the game screen, with the shared Keyboard
-// composite at the bottom.
+// stack vertically. Placement uses tap+drag on the board plus a
+// Rotate and Next button. Firing uses tap+drag on the enemy board,
+// a cursor that is always visible on your turn, and an optional
+// D-pad that overlays the player's own board. Chat opens as a
+// full-screen overlay with a Hide button in its top-right corner.
 //
 // Shared-file trust model: both players read and write the same
 // game.txt. There is no attempt to hide fleet positions from the
@@ -182,7 +183,6 @@ function truncate(s, n) {
   return s.slice(0, n);
 }
 
-// Format an ISO timestamp as 24-hour HH:MM:SS. Local time, no date.
 function formatTime(iso) {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "??:??:??";
@@ -536,7 +536,7 @@ export class Battleship extends App {
       stroke: null,
     });
 
-    // Header strip. Same shape on desktop and mobile.
+    // Header strip.
     screen.add(new Button({
       x: 24, y: 24, w: 140, h: 48,
       text: "Leave",
@@ -615,7 +615,7 @@ export class Battleship extends App {
     });
     screen.add(this.statusLabel);
 
-    // Boards. Desktop: side by side. Mobile: stacked vertically.
+    // Boards.
     if (this.mobile) {
       this._buildBoardsMobile(screen);
     } else {
@@ -651,8 +651,6 @@ export class Battleship extends App {
     return screen;
   }
 
-  // ---------- Boards: desktop ----------
-
   _buildBoardsDesktop(screen) {
     const W = Viewport.width;
 
@@ -687,7 +685,6 @@ export class Battleship extends App {
     });
     screen.add(this.opLayer);
 
-    // Controls legend (desktop only).
     screen.add(new Text({
       x: W / 2, y: Viewport.height - 40,
       text: "Mouse: hover and click. Keys: WASD/Arrows move, R rotate, Enter place or lock a shot.",
@@ -700,14 +697,11 @@ export class Battleship extends App {
     this._buildActionRow(screen, Viewport.height - 96);
   }
 
-  // ---------- Boards: mobile ----------
-
   _buildBoardsMobile(screen) {
     const W = Viewport.width;
-    const H = Viewport.height;
 
     const cell    = 46;
-    const boardPx = cell * BOARD_W;   // 460
+    const boardPx = cell * BOARD_W;
     const bx      = (W - boardPx) / 2;
 
     const myBy = 150;
@@ -737,12 +731,11 @@ export class Battleship extends App {
     });
     screen.add(this.opLayer);
 
-    // Action row: below the enemy board.
+    // Action row below the enemy board.
     const actionY = this._opBy + boardPx + 20;
     this._buildActionRow(screen, actionY);
 
-    // Show Controls toggle for the fire D-pad. Positioned under the
-    // action row. Hidden unless in the fire phase.
+    // Show Controls toggle: below the action row.
     const showCtrlY = actionY + 64;
     this.controlsToggle = new Button({
       x: W / 2 - 160, y: showCtrlY, w: 320, h: 52,
@@ -757,13 +750,15 @@ export class Battleship extends App {
     this.controlsToggle.visible = false;
     screen.add(this.controlsToggle);
 
-    // D-pad. Positioned below the Show Controls button, in the space
-    // above the Chat button. Buttons start hidden.
-    const dpadCx    = W / 2;
-    const dpadTop   = showCtrlY + 64;
-    const btnSize   = 84;
-    const gap       = 10;
-    const centerY   = dpadTop + btnSize + gap / 2;
+    // D-pad. Placed so it overlays YOUR WATERS. Buttons are added
+    // to the screen after the boards, so they draw on top. During
+    // the fire phase taps on your own board are inert anyway, so no
+    // conflict. Buttons start hidden.
+    const dpadCx  = W / 2;
+    const btnSize = 84;
+    const gap     = 10;
+    // Center the D-pad vertically inside the player's board.
+    const centerY = this._myBy + boardPx / 2;
 
     this.dpadButtons = [];
 
@@ -797,12 +792,8 @@ export class Battleship extends App {
       screen.add(b);
       this.dpadButtons.push(b);
     }
-
-    void H;
   }
 
-  // Draw the static frame of a board: label above, dark panel behind,
-  // grid lines. Cell size and board pixel size are passed in.
   _drawBoardFrame(screen, bx, by, boardPx, cell, label, labelColor) {
     screen.add(new Text({
       x: bx, y: by - 28,
@@ -837,16 +828,10 @@ export class Battleship extends App {
 
   // ---------- Action row ----------
 
-  // Builds the row of action buttons at the given y. The actual
-  // visibility and colors are driven by _renderButtons. Positions
-  // here are the "desktop-like" spread; on mobile we use a narrower
-  // spread since the boards are stacked and the row sits below the
-  // enemy board.
   _buildActionRow(screen, actionY) {
     const W = Viewport.width;
     const mobile = this.mobile;
 
-    // Vote buttons: Me / Defer.
     if (mobile) {
       this.voteMeBtn = new Button({
         x: 40, y: actionY, w: 200, h: 56,
@@ -887,8 +872,6 @@ export class Battleship extends App {
       this.readyBtn.visible = false;
       screen.add(this.readyBtn);
 
-      // Placement controls. Three slots on the row, plus a separate
-      // "Place Ships" button when not yet placing.
       this.placeBtn = new Button({
         x: W / 2 - 220, y: actionY, w: 440, h: 56,
         text: "Place Ships",
@@ -1071,16 +1054,11 @@ export class Battleship extends App {
       this.fireBtn.visible = false;
       screen.add(this.fireBtn);
 
-      // Desktop has no Next button.
       this.nextBtn = null;
-
-      // Desktop has no D-pad or Show Controls toggle.
       this.controlsToggle = null;
       this.dpadButtons = [];
     }
 
-    // Outcome banner (both). Shown between the boards and the action
-    // row while waiting for both fleets.
     this.outcomeLabel = new Text({
       x: W / 2,
       y: actionY - 30,
@@ -1099,7 +1077,6 @@ export class Battleship extends App {
     const H = Viewport.height;
 
     if (this.mobile) {
-      // Full-screen overlay. Everything except the Chat button.
       const panel = new Panel({
         x: 0, y: 0, w: W, h: H,
         fill: "#0d1216",
@@ -1109,14 +1086,27 @@ export class Battleship extends App {
       screen.add(panel);
       this.chatPanel = panel;
 
-      const titleY = 30;
+      // Title strip.
       panel.add(new Text({
-        x: 20, y: titleY,
+        x: 20, y: 30,
         text: "Room Chat",
         font: "bold 20px sans-serif",
         color: "#8fa9d0",
         align: "left",
         baseline: "middle",
+      }));
+
+      // Hide button, top-right. Above the log so it is never covered
+      // by the keyboard. Toggles chat closed.
+      panel.add(new Button({
+        x: W - 140, y: 12, w: 120, h: 44,
+        text: "Hide",
+        fill: BTN_DARK_FILL,
+        stroke: BTN_DARK_STROKE,
+        strokeWidth: 2,
+        radius: 8,
+        textOptions: { font: "bold 18px sans-serif", color: "#ffffff" },
+        onClick: () => this._toggleChat(),
       }));
 
       // Keyboard at the bottom.
@@ -1178,10 +1168,9 @@ export class Battleship extends App {
       });
       panel.add(this.sendBtn);
 
-      // Log above the input row.
+      // Log above the input row. Starts below the title strip.
       const logX = 20;
-      const logY = 60;
-      const logW = W - 40;
+      const logY = 70;
       const logH = rowY - logY - 12;
 
       this._chatMaxLines = Math.floor((logH - 8) / 22);
@@ -2051,11 +2040,7 @@ export class Battleship extends App {
       }
       this.game = this._decodeGame(gameContent);
 
-      // Resolve the first-turn handshake if the game has not yet
-      // started and both votes and both ready flags are in. The
-      // resolved object is captured and assigned to this.game after
-      // a successful write, so the client that performs the resolve
-      // sees the outcome in the SAME cycle it resolved.
+      // Resolve the first-turn handshake.
       const needsResolve = this.game
         && !this.game.started
         && this.game.voteP0 && this.game.voteP1
@@ -2232,9 +2217,6 @@ export class Battleship extends App {
 
   // =================================================================
   // Game state encoding.
-  //
-  // Load-bearing format. If FLEET changes, _encodeGame and _decodeGame
-  // must change together. See the header comment for the full layout.
   // =================================================================
 
   _encodeGame(g) {
@@ -2519,8 +2501,6 @@ export class Battleship extends App {
     if (!this.placing) return;
     this.placeRot = !this.placeRot;
 
-    // If a preview exists, re-render it in the new orientation at
-    // the same anchor.
     if (this._placePreview) {
       this._placePreview.horiz = !this.placeRot;
     }
@@ -2536,8 +2516,6 @@ export class Battleship extends App {
     this._renderAll();
   }
 
-  // Next: commit the current ship's placement locally (no git) and
-  // advance. Valid only when a valid preview exists at the anchor.
   _nextPlace() {
     if (!this.placing) return;
     if (this.placeIdx >= FLEET.length) return;
@@ -2554,8 +2532,6 @@ export class Battleship extends App {
     this.placeIdx++;
     this._placePreview = null;
 
-    // If that was the last ship, the row changes: Rotate becomes
-    // Reset. _renderButtons handles the visibility.
     this._renderAll();
   }
 
@@ -2692,9 +2668,6 @@ export class Battleship extends App {
     return hits >= total;
   }
 
-  // Desktop lock/unlock rule: two-click behavior with the yellow cell.
-  // Mobile: no lock concept; tap/drag just moves the cursor and Fire
-  // commits. _canFireNow gates both.
   _lockShotAt(cx, cy) {
     if (!this._canFireNow()) return;
 
@@ -2722,6 +2695,18 @@ export class Battleship extends App {
       && this._bothFleetsIn();
   }
 
+  // Looser gate used by the mobile cursor render: still your turn,
+  // still fire phase, but ignores _awaitingFire so the cursor stays
+  // visible during the "Firing..." window.
+  _canShowMobileCursor() {
+    return this.game
+      && this.game.started
+      && this.game.winner == null
+      && this.game.turn === this.slot
+      && !this.placing
+      && this._bothFleetsIn();
+  }
+
   _bothFleetsIn() {
     if (!this.game || !this.game.players) return false;
     for (let p = 0; p < SLOTS; p++) {
@@ -2731,7 +2716,6 @@ export class Battleship extends App {
     return true;
   }
 
-  // Nudge the fire cursor by direction. Used by the mobile D-pad.
   _nudgeFireCursor(dir) {
     if (!this._canFireNow()) return;
     const c = this.fireCursor;
@@ -2746,8 +2730,6 @@ export class Battleship extends App {
     if (!this._canFireNow()) return;
     if (this._firing) return;
 
-    // Target cell: desktop uses the locked shot; mobile uses the
-    // cursor position directly.
     let cx, cy;
     if (this.mobile) {
       cx = this.fireCursor.x;
@@ -2825,6 +2807,14 @@ export class Battleship extends App {
       });
 
       await this._refreshGameMirror();
+
+      // After a HIT (turn is still ours), reset the mobile cursor to
+      // (0,0). After a MISS the turn is the opponent's, so the cursor
+      // is not shown and resetting is harmless. On win, likewise.
+      if (this.mobile) {
+        this.fireCursor = { x: 0, y: 0 };
+      }
+
       this.lockedShot = null;
       this._clearStatus();
       this._renderAll();
@@ -2852,7 +2842,6 @@ export class Battleship extends App {
       this.chatKeyboard.visible = this.chatOpen;
     }
 
-    // Chat button label toggles.
     if (this.chatBtn) {
       this.chatBtn.setText(this.chatOpen ? "Hide" : "Chat");
     }
@@ -2865,8 +2854,6 @@ export class Battleship extends App {
     }
   }
 
-  // Render stored chat lines as: [HH:MM:SS]username:text
-  // Storage format is unchanged: username|ISO-timestamp|text
   _renderChatLog() {
     if (!this.chatMessageTexts) return;
     const max = this.chatMessageTexts.length;
@@ -3060,7 +3047,6 @@ export class Battleship extends App {
       }
     }
 
-    // Placement preview (desktop hover cell OR mobile drag preview).
     if (this.placing && this.placeIdx < FLEET.length) {
       let anchor, horiz;
       if (this.mobile) {
@@ -3111,11 +3097,13 @@ export class Battleship extends App {
       }
     }
 
-    if (!this._canFireNow()) return;
-
-    // Mobile: only the cursor. The cursor IS the choice; Fire
-    // commits at its cell.
+    // Mobile: cursor is drawn whenever it is this player's turn in
+    // the fire phase, INCLUDING while _awaitingFire is true. This
+    // keeps the cursor visible during "Firing..." so the shooter can
+    // see where the shot is going. After a hit, the cursor has been
+    // reset to (0,0) and this render picks it up.
     if (this.mobile) {
+      if (!this._canShowMobileCursor()) return;
       const c = this.fireCursor;
       this.opLayer.add(new Rect({
         x: c.x * cell + 2,
@@ -3129,8 +3117,9 @@ export class Battleship extends App {
       return;
     }
 
-    // Desktop: locked-shot yellow cell takes precedence; otherwise
-    // draw the cursor outline.
+    // Desktop.
+    if (!this._canFireNow()) return;
+
     if (this.lockedShot) {
       this.opLayer.add(new Rect({
         x: this.lockedShot.x * cell + 2,
@@ -3167,7 +3156,6 @@ export class Battleship extends App {
     const placeCtl     = this.placing;
     const firePhase    = this._canFireNow();
 
-    // Vote buttons.
     this.voteMeBtn.visible    = !!votePhase;
     this.voteDeferBtn.visible = !!votePhase;
     this.readyBtn.visible     = !!votePhase;
@@ -3200,20 +3188,14 @@ export class Battleship extends App {
       }
     }
 
-    // Place Ships entry.
     this.placeBtn.visible = !!placeEntry;
 
-    // Placement controls.
     const allPlaced = this._allShipsPlaced();
 
-    // Desktop placement row: Lock In / Rotate / Reset.
-    // Mobile placement row: Lock In / Rotate / Next, and when all
-    // ships are placed: Lock In / Reset (Rotate becomes Reset).
     if (this.mobile) {
       if (placeCtl) {
         this.lockBtn.visible = true;
         if (allPlaced) {
-          // All ships placed. Lock In is green; Rotate is now Reset.
           this.lockBtn.setText("Lock In");
           this.lockBtn.setBaseStyle({ fill: BTN_GREEN_FILL, stroke: BTN_GREEN_STROKE });
 
@@ -3221,9 +3203,6 @@ export class Battleship extends App {
           this.nextBtn.visible   = false;
           this.resetBtn.visible  = true;
         } else {
-          // Mid-placement. Lock In is greyed (nothing to lock in
-          // until all ships placed). Rotate and Next are visible.
-          // Next is greyed until a valid preview exists.
           this.lockBtn.setText("Lock In");
           this.lockBtn.setBaseStyle({ fill: BUSY_FILL, stroke: BUSY_STROKE });
 
@@ -3244,8 +3223,6 @@ export class Battleship extends App {
           this.resetBtn.visible = false;
         }
       } else {
-        // Not placing. Lock In may still be shown if this player has
-        // locked in and is waiting for the opponent.
         const waiting = gameStarted && this._iHaveLockedIn() && !this._bothFleetsIn();
         if (waiting) {
           this.lockBtn.visible = true;
@@ -3259,7 +3236,6 @@ export class Battleship extends App {
         this.resetBtn.visible  = false;
       }
     } else {
-      // Desktop.
       this.rotateBtn.visible = !!placeCtl;
       this.resetBtn.visible  = !!placeCtl;
 
@@ -3291,10 +3267,8 @@ export class Battleship extends App {
       }
     }
 
-    // Fire button.
     this.fireBtn.visible = !!firePhase && (this.mobile || !!this.lockedShot);
 
-    // Show Controls / D-pad. Mobile, fire phase only.
     if (this.mobile) {
       if (this.controlsToggle) {
         if (firePhase) {
@@ -3310,7 +3284,6 @@ export class Battleship extends App {
     }
   }
 
-  // Is the current placement preview a valid ship position?
   _previewIsValid() {
     if (!this.placing) return false;
     if (this.placeIdx >= FLEET.length) return false;
@@ -3469,7 +3442,6 @@ export class Battleship extends App {
   }
 
   _handleGameMouseMove(e) {
-    // Mobile placement: if dragging, update the preview.
     if (this.mobile && this.placing && this._dragPlace) {
       const c = this._cellFromPoint(e.x, e.y, this._myBx, this._myBy);
       if (c) {
@@ -3479,7 +3451,6 @@ export class Battleship extends App {
       return;
     }
 
-    // Mobile firing: if dragging, move the cursor.
     if (this.mobile && this._dragFire) {
       if (this._canFireNow()) {
         const c = this._cellFromPoint(e.x, e.y, this._opBx, this._opBy);
@@ -3491,7 +3462,6 @@ export class Battleship extends App {
       return;
     }
 
-    // Desktop placement: hover preview.
     if (!this.mobile && this.placing) {
       const c = this._cellFromPoint(e.x, e.y, this._myBx, this._myBy);
       if (c) {
@@ -3501,7 +3471,6 @@ export class Battleship extends App {
       return;
     }
 
-    // Desktop firing: hover cursor.
     if (!this.mobile && this._canFireNow()) {
       const c = this._cellFromPoint(e.x, e.y, this._opBx, this._opBy);
       if (c) {
@@ -3512,7 +3481,6 @@ export class Battleship extends App {
   }
 
   _handleGameMouseDown(e) {
-    // Mobile placement.
     if (this.mobile && this.placing) {
       const c = this._cellFromPoint(e.x, e.y, this._myBx, this._myBy);
       if (c) {
@@ -3523,7 +3491,6 @@ export class Battleship extends App {
       return;
     }
 
-    // Desktop placement.
     if (!this.mobile && this.placing) {
       const c = this._cellFromPoint(e.x, e.y, this._myBx, this._myBy);
       if (c) {
@@ -3532,7 +3499,6 @@ export class Battleship extends App {
       }
     }
 
-    // Mobile firing: tap-and-drag moves the cursor; release leaves it.
     if (this.mobile && this._canFireNow()) {
       const c = this._cellFromPoint(e.x, e.y, this._opBx, this._opBy);
       if (c) {
@@ -3543,7 +3509,6 @@ export class Battleship extends App {
       return;
     }
 
-    // Desktop firing: click to lock/unlock (two-click rule).
     if (!this.mobile && this._canFireNow()) {
       const c = this._cellFromPoint(e.x, e.y, this._opBx, this._opBy);
       if (c) {
@@ -3554,9 +3519,6 @@ export class Battleship extends App {
   }
 
   _handleGameMouseUp(e) {
-    // Mobile placement release: the preview stays where it was
-    // released. The player presses Next to commit, or drags again to
-    // move it.
     if (this.mobile && this.placing && this._dragPlace) {
       this._dragPlace = false;
 
@@ -3568,7 +3530,6 @@ export class Battleship extends App {
       return;
     }
 
-    // Mobile firing release: cursor stays where the finger lifted.
     if (this.mobile && this._dragFire) {
       this._dragFire = false;
 
