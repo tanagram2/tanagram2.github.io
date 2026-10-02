@@ -50,10 +50,16 @@
 // currentContent is the freshest content _writeWithRetry has, which
 // on a conflict retry is the freshly re-read file. The callback
 // decodes that, changes only the field(s) this client owns, and
-// re-encodes. Every other player's field passes through byte-for-
+// re-encodes. Every other player's field passes through byte-by-
 // byte from the fresh read. This is the same shape as the presence
 // splice and is what keeps two concurrent writers from stomping
 // each other's lines.
+//
+// Mobile pass: the layout branches on Viewport.isMobile. Boards
+// stack vertically. Placement and firing use tap+drag on the board
+// plus an optional on-screen D-pad for firing. Chat opens as a full
+// overlay that covers the game screen, with the shared Keyboard
+// composite at the bottom.
 //
 // Shared-file trust model: both players read and write the same
 // game.txt. There is no attempt to hide fleet positions from the
@@ -140,6 +146,8 @@ const BTN_GREEN_FILL   = "#2a6a3a";
 const BTN_GREEN_STROKE = "#6aaa7a";
 const BTN_RED_FILL     = "#8a2020";
 const BTN_RED_STROKE   = "#e06060";
+const BTN_DARK_FILL    = "#2a2a3a";
+const BTN_DARK_STROKE  = "#5a5a7a";
 
 // base64 helpers. The browser's btoa/atob mishandle non-ASCII.
 
@@ -207,12 +215,15 @@ export class Battleship extends App {
     this.placeRot  = false;
     this.hoverCell = { x: 0, y: 0 };
     this.myFleet   = null;
+    this._dragPlace = false;
+    this._placePreview = null;   // { x, y, horiz } or null
 
     // Fire state.
     this.fireCursor = { x: 0, y: 0 };
-    this.lockedShot = null;         // { x, y } or null
+    this.lockedShot = null;         // { x, y } or null - desktop only
     this.lastFeedback = "";
     this._awaitingFire = false;
+    this._dragFire = false;
 
     // First-turn vote state (local mirror of the shared values).
     this.myVote   = null;           // "me" | "defer" | null
@@ -222,6 +233,9 @@ export class Battleship extends App {
     this.chatOpen = false;
     this.unread   = 0;
     this._seenChatCount = 0;
+
+    // Mobile controls visibility (fire phase only).
+    this.controlsVisible = false;
 
     // Cycle scheduler.
     this._cycleTimer  = null;
@@ -283,14 +297,6 @@ export class Battleship extends App {
 
   // ---------- Busy-button helper ----------
 
-  // Grey a Button (fill and stroke) for the duration of a git
-  // request, and lock its hover/press styling so a pointer wandering
-  // over the button cannot undo the busy look. On completion the
-  // Button re-applies its CURRENT base style - which _renderButtons
-  // keeps fresh via setBaseStyle - so the button snaps straight to
-  // whatever resting color it should now have. No snapshot is
-  // captured or restored.
-
   _busyStart(btn) {
     if (!btn || !btn.self) return;
     btn.setBusy(true);
@@ -301,9 +307,6 @@ export class Battleship extends App {
   _busyEnd(btn) {
     if (!btn || !btn.self) return;
     btn.setBusy(false);
-    // Re-apply the current base style now. setBaseStyle({}) with no
-    // fields is a no-op update that still triggers the apply when
-    // the button is not busy.
     btn.setBaseStyle({});
   }
 
@@ -521,6 +524,8 @@ export class Battleship extends App {
     return screen;
   }
 
+  // ---------- Game screen ----------
+
   _buildGameScreen() {
     const W = Viewport.width;
     const H = Viewport.height;
@@ -531,6 +536,7 @@ export class Battleship extends App {
       stroke: null,
     });
 
+    // Header strip. Same shape on desktop and mobile.
     screen.add(new Button({
       x: 24, y: 24, w: 140, h: 48,
       text: "Leave",
@@ -609,230 +615,14 @@ export class Battleship extends App {
     });
     screen.add(this.statusLabel);
 
-    // Boards.
-    const cell   = 36;
-    const boardPx = cell * BOARD_W;
-    const gap    = 80;
-    const totalW = boardPx * 2 + gap;
-    const bx     = (W - totalW) / 2;
-    const by     = 150;
-
-    this._cell     = cell;
-    this._myBx     = bx;
-    this._myBy     = by;
-    this._opBx     = bx + boardPx + gap;
-    this._opBy     = by;
-    this._boardPx  = boardPx;
-
-    screen.add(new Text({
-      x: this._myBx, y: by - 28,
-      text: "YOUR WATERS",
-      font: "bold 14px monospace",
-      color: "#80a0c0",
-      align: "left",
-      baseline: "middle",
-    }));
-    screen.add(new Text({
-      x: this._opBx, y: by - 28,
-      text: "ENEMY WATERS",
-      font: "bold 14px monospace",
-      color: "#c08080",
-      align: "left",
-      baseline: "middle",
-    }));
-
-    screen.add(new Panel({
-      x: this._myBx - 2, y: this._myBy - 2,
-      w: boardPx + 4, h: boardPx + 4,
-      fill: "#0a0e12",
-      stroke: "#2a3238",
-      strokeWidth: 2,
-    }));
-    screen.add(new Panel({
-      x: this._opBx - 2, y: this._opBy - 2,
-      w: boardPx + 4, h: boardPx + 4,
-      fill: "#0a0e12",
-      stroke: "#2a3238",
-      strokeWidth: 2,
-    }));
-
-    // Grids.
-    for (let i = 0; i <= BOARD_W; i++) {
-      screen.add(new Line({
-        x1: this._myBx + i * cell, y1: this._myBy,
-        x2: this._myBx + i * cell, y2: this._myBy + boardPx,
-        stroke: "#1e262c", strokeWidth: 1,
-      }));
-      screen.add(new Line({
-        x1: this._myBx, y1: this._myBy + i * cell,
-        x2: this._myBx + boardPx, y2: this._myBy + i * cell,
-        stroke: "#1e262c", strokeWidth: 1,
-      }));
-      screen.add(new Line({
-        x1: this._opBx + i * cell, y1: this._opBy,
-        x2: this._opBx + i * cell, y2: this._opBy + boardPx,
-        stroke: "#1e262c", strokeWidth: 1,
-      }));
-      screen.add(new Line({
-        x1: this._opBx, y1: this._opBy + i * cell,
-        x2: this._opBx + boardPx, y2: this._opBy + i * cell,
-        stroke: "#1e262c", strokeWidth: 1,
-      }));
+    // Boards. Desktop: side by side. Mobile: stacked vertically.
+    if (this.mobile) {
+      this._buildBoardsMobile(screen);
+    } else {
+      this._buildBoardsDesktop(screen);
     }
 
-    // Dynamic layers.
-    this.myLayer = new Panel({
-      x: this._myBx, y: this._myBy,
-      w: boardPx, h: boardPx,
-      fill: null, stroke: null,
-    });
-    screen.add(this.myLayer);
-
-    this.opLayer = new Panel({
-      x: this._opBx, y: this._opBy,
-      w: boardPx, h: boardPx,
-      fill: null, stroke: null,
-    });
-    screen.add(this.opLayer);
-
-    // Controls legend.
-    screen.add(new Text({
-      x: W / 2, y: H - 40,
-      text: "Mouse: hover and click. Keys: WASD/Arrows move, R rotate, Enter place or lock a shot.",
-      font: "13px monospace",
-      color: "#607080",
-      align: "center",
-      baseline: "middle",
-    }));
-
-    // Action row of buttons. Visibility is toggled by state.
-    const actionY = H - 96;
-
-    // Vote buttons: Me / Defer.
-    this.voteMeBtn = new Button({
-      x: W / 2 - 310, y: actionY, w: 200, h: 52,
-      text: "Me",
-      fill: BTN_BLUE_FILL,
-      stroke: BTN_BLUE_STROKE,
-      strokeWidth: 2,
-      radius: 8,
-      textOptions: { font: "bold 18px sans-serif", color: "#ffffff" },
-      onClick: () => this._setVote("me"),
-    });
-    this.voteMeBtn.visible = false;
-    screen.add(this.voteMeBtn);
-
-    this.voteDeferBtn = new Button({
-      x: W / 2 - 100, y: actionY, w: 200, h: 52,
-      text: "Defer",
-      fill: BTN_BLUE_FILL,
-      stroke: BTN_BLUE_STROKE,
-      strokeWidth: 2,
-      radius: 8,
-      textOptions: { font: "bold 18px sans-serif", color: "#ffffff" },
-      onClick: () => this._setVote("defer"),
-    });
-    this.voteDeferBtn.visible = false;
-    screen.add(this.voteDeferBtn);
-
-    // Ready / Unready.
-    this.readyBtn = new Button({
-      x: W / 2 + 110, y: actionY, w: 200, h: 52,
-      text: "Ready",
-      fill: BTN_GREEN_FILL,
-      stroke: BTN_GREEN_STROKE,
-      strokeWidth: 2,
-      radius: 8,
-      textOptions: { font: "bold 18px sans-serif", color: "#ffffff" },
-      onClick: () => this._toggleReady(),
-    });
-    this.readyBtn.visible = false;
-    screen.add(this.readyBtn);
-
-    // Lock In / Rotate / Reset during placement.
-    this.lockBtn = new Button({
-      x: W / 2 - 340, y: actionY, w: 200, h: 52,
-      text: "Lock In",
-      fill: "#2a6a3a",
-      stroke: "#6aaa7a",
-      strokeWidth: 2,
-      radius: 8,
-      textOptions: { font: "bold 18px sans-serif", color: "#ffffff" },
-      onClick: () => this._lockIn(),
-    });
-    this.lockBtn.visible = false;
-    screen.add(this.lockBtn);
-
-    this.rotateBtn = new Button({
-      x: W / 2 - 120, y: actionY, w: 240, h: 52,
-      text: "Rotate (R)",
-      fill: "#2a2a3a",
-      stroke: "#5a5a7a",
-      strokeWidth: 2,
-      radius: 8,
-      textOptions: { font: "bold 18px sans-serif", color: "#ffffff" },
-      onClick: () => this._rotatePlace(),
-    });
-    this.rotateBtn.visible = false;
-    screen.add(this.rotateBtn);
-
-    this.resetBtn = new Button({
-      x: W / 2 + 140, y: actionY, w: 200, h: 52,
-      text: "Reset",
-      fill: "#2a2a3a",
-      stroke: "#5a5a7a",
-      strokeWidth: 2,
-      radius: 8,
-      textOptions: { font: "bold 18px sans-serif", color: "#ffffff" },
-      onClick: () => this._resetPlacement(),
-    });
-    this.resetBtn.visible = false;
-    screen.add(this.resetBtn);
-
-    // Place Ships entry.
-    this.placeBtn = new Button({
-      x: W / 2 - 160, y: actionY, w: 320, h: 52,
-      text: "Place Ships",
-      fill: "#2a3552",
-      stroke: "#6a86b8",
-      strokeWidth: 2,
-      radius: 8,
-      textOptions: { font: "bold 18px sans-serif", color: "#ffffff" },
-      onClick: () => this._beginPlacement(),
-    });
-    this.placeBtn.visible = false;
-    screen.add(this.placeBtn);
-
-    // Fire button (centered under the boards, appears when a shot is
-    // locked).
-    this.fireBtn = new Button({
-      x: W / 2 - 110, y: actionY, w: 220, h: 52,
-      text: "Fire!",
-      fill: BTN_RED_FILL,
-      stroke: BTN_RED_STROKE,
-      strokeWidth: 2,
-      radius: 8,
-      textOptions: { font: "bold 22px sans-serif", color: "#ffffff" },
-      onClick: () => this._fireLockedShot(),
-    });
-    this.fireBtn.visible = false;
-    screen.add(this.fireBtn);
-
-    // Vote outcome banner. Shown once both players are ready, until
-    // both fleets are locked in.
-    this.outcomeLabel = new Text({
-      x: W / 2,
-      y: H - 96,
-      text: "",
-      font: "bold 18px sans-serif",
-      color: "#a0c0ff",
-      align: "center",
-      baseline: "middle",
-    });
-    this.outcomeLabel.visible = false;
-    screen.add(this.outcomeLabel);
-
-    // Chat button + unread badge.
+    // Chat button + unread badge (bottom-right on both).
     this.chatBtn = new Button({
       x: W - 164, y: H - 60, w: 140, h: 44,
       text: "Chat",
@@ -855,120 +645,664 @@ export class Battleship extends App {
     });
     screen.add(this.unreadBadge);
 
-    // Chat panel (hidden by default).
+    // Chat overlay (hidden by default).
     this._buildChatPanel(screen);
 
     return screen;
+  }
+
+  // ---------- Boards: desktop ----------
+
+  _buildBoardsDesktop(screen) {
+    const W = Viewport.width;
+
+    const cell    = 36;
+    const boardPx = cell * BOARD_W;
+    const gap     = 80;
+    const totalW  = boardPx * 2 + gap;
+    const bx      = (W - totalW) / 2;
+    const by      = 150;
+
+    this._cell     = cell;
+    this._myBx     = bx;
+    this._myBy     = by;
+    this._opBx     = bx + boardPx + gap;
+    this._opBy     = by;
+    this._boardPx  = boardPx;
+
+    this._drawBoardFrame(screen, this._myBx, this._myBy, boardPx, cell, "YOUR WATERS",  "#80a0c0");
+    this._drawBoardFrame(screen, this._opBx, this._opBy, boardPx, cell, "ENEMY WATERS", "#c08080");
+
+    this.myLayer = new Panel({
+      x: this._myBx, y: this._myBy,
+      w: boardPx, h: boardPx,
+      fill: null, stroke: null,
+    });
+    screen.add(this.myLayer);
+
+    this.opLayer = new Panel({
+      x: this._opBx, y: this._opBy,
+      w: boardPx, h: boardPx,
+      fill: null, stroke: null,
+    });
+    screen.add(this.opLayer);
+
+    // Controls legend (desktop only).
+    screen.add(new Text({
+      x: W / 2, y: Viewport.height - 40,
+      text: "Mouse: hover and click. Keys: WASD/Arrows move, R rotate, Enter place or lock a shot.",
+      font: "13px monospace",
+      color: "#607080",
+      align: "center",
+      baseline: "middle",
+    }));
+
+    this._buildActionRow(screen, Viewport.height - 96);
+  }
+
+  // ---------- Boards: mobile ----------
+
+  _buildBoardsMobile(screen) {
+    const W = Viewport.width;
+    const H = Viewport.height;
+
+    const cell    = 46;
+    const boardPx = cell * BOARD_W;   // 460
+    const bx      = (W - boardPx) / 2;
+
+    const myBy = 150;
+    const opBy = myBy + boardPx + 60;
+
+    this._cell     = cell;
+    this._myBx     = bx;
+    this._myBy     = myBy;
+    this._opBx     = bx;
+    this._opBy     = opBy;
+    this._boardPx  = boardPx;
+
+    this._drawBoardFrame(screen, this._myBx, this._myBy, boardPx, cell, "YOUR WATERS",  "#80a0c0");
+    this._drawBoardFrame(screen, this._opBx, this._opBy, boardPx, cell, "ENEMY WATERS", "#c08080");
+
+    this.myLayer = new Panel({
+      x: this._myBx, y: this._myBy,
+      w: boardPx, h: boardPx,
+      fill: null, stroke: null,
+    });
+    screen.add(this.myLayer);
+
+    this.opLayer = new Panel({
+      x: this._opBx, y: this._opBy,
+      w: boardPx, h: boardPx,
+      fill: null, stroke: null,
+    });
+    screen.add(this.opLayer);
+
+    // Action row: below the enemy board.
+    const actionY = this._opBy + boardPx + 20;
+    this._buildActionRow(screen, actionY);
+
+    // Show Controls toggle for the fire D-pad. Positioned under the
+    // action row. Hidden unless in the fire phase.
+    const showCtrlY = actionY + 64;
+    this.controlsToggle = new Button({
+      x: W / 2 - 160, y: showCtrlY, w: 320, h: 52,
+      text: "Show Controls",
+      fill: BTN_DARK_FILL,
+      stroke: BTN_DARK_STROKE,
+      strokeWidth: 2,
+      radius: 8,
+      textOptions: { font: "bold 20px sans-serif", color: "#ffffff" },
+      onClick: () => this._toggleControls(),
+    });
+    this.controlsToggle.visible = false;
+    screen.add(this.controlsToggle);
+
+    // D-pad. Positioned below the Show Controls button, in the space
+    // above the Chat button. Buttons start hidden.
+    const dpadCx    = W / 2;
+    const dpadTop   = showCtrlY + 64;
+    const btnSize   = 84;
+    const gap       = 10;
+    const centerY   = dpadTop + btnSize + gap / 2;
+
+    this.dpadButtons = [];
+
+    const defs = [
+      { text: "^", dir: "up",
+        x: dpadCx - btnSize / 2,
+        y: centerY - btnSize - gap / 2 },
+      { text: "v", dir: "down",
+        x: dpadCx - btnSize / 2,
+        y: centerY + gap / 2 },
+      { text: "<", dir: "left",
+        x: dpadCx - btnSize - gap / 2 - btnSize / 2,
+        y: centerY - btnSize / 2 },
+      { text: ">", dir: "right",
+        x: dpadCx + gap / 2 + btnSize / 2,
+        y: centerY - btnSize / 2 },
+    ];
+
+    for (const d of defs) {
+      const b = new Button({
+        x: d.x, y: d.y, w: btnSize, h: btnSize,
+        text: d.text,
+        fill: BTN_DARK_FILL,
+        stroke: BTN_DARK_STROKE,
+        strokeWidth: 2,
+        radius: 8,
+        textOptions: { font: "bold 32px sans-serif", color: "#d8e4f7" },
+        onClick: () => this._nudgeFireCursor(d.dir),
+      });
+      b.visible = false;
+      screen.add(b);
+      this.dpadButtons.push(b);
+    }
+
+    void H;
+  }
+
+  // Draw the static frame of a board: label above, dark panel behind,
+  // grid lines. Cell size and board pixel size are passed in.
+  _drawBoardFrame(screen, bx, by, boardPx, cell, label, labelColor) {
+    screen.add(new Text({
+      x: bx, y: by - 28,
+      text: label,
+      font: "bold 14px monospace",
+      color: labelColor,
+      align: "left",
+      baseline: "middle",
+    }));
+
+    screen.add(new Panel({
+      x: bx - 2, y: by - 2,
+      w: boardPx + 4, h: boardPx + 4,
+      fill: "#0a0e12",
+      stroke: "#2a3238",
+      strokeWidth: 2,
+    }));
+
+    for (let i = 0; i <= BOARD_W; i++) {
+      screen.add(new Line({
+        x1: bx + i * cell, y1: by,
+        x2: bx + i * cell, y2: by + boardPx,
+        stroke: "#1e262c", strokeWidth: 1,
+      }));
+      screen.add(new Line({
+        x1: bx, y1: by + i * cell,
+        x2: bx + boardPx, y2: by + i * cell,
+        stroke: "#1e262c", strokeWidth: 1,
+      }));
+    }
+  }
+
+  // ---------- Action row ----------
+
+  // Builds the row of action buttons at the given y. The actual
+  // visibility and colors are driven by _renderButtons. Positions
+  // here are the "desktop-like" spread; on mobile we use a narrower
+  // spread since the boards are stacked and the row sits below the
+  // enemy board.
+  _buildActionRow(screen, actionY) {
+    const W = Viewport.width;
+    const mobile = this.mobile;
+
+    // Vote buttons: Me / Defer.
+    if (mobile) {
+      this.voteMeBtn = new Button({
+        x: 40, y: actionY, w: 200, h: 56,
+        text: "Me",
+        fill: BTN_BLUE_FILL,
+        stroke: BTN_BLUE_STROKE,
+        strokeWidth: 2,
+        radius: 8,
+        textOptions: { font: "bold 20px sans-serif", color: "#ffffff" },
+        onClick: () => this._setVote("me"),
+      });
+      this.voteMeBtn.visible = false;
+      screen.add(this.voteMeBtn);
+
+      this.voteDeferBtn = new Button({
+        x: 260, y: actionY, w: 200, h: 56,
+        text: "Defer",
+        fill: BTN_BLUE_FILL,
+        stroke: BTN_BLUE_STROKE,
+        strokeWidth: 2,
+        radius: 8,
+        textOptions: { font: "bold 20px sans-serif", color: "#ffffff" },
+        onClick: () => this._setVote("defer"),
+      });
+      this.voteDeferBtn.visible = false;
+      screen.add(this.voteDeferBtn);
+
+      this.readyBtn = new Button({
+        x: 480, y: actionY, w: 200, h: 56,
+        text: "Ready",
+        fill: BTN_GREEN_FILL,
+        stroke: BTN_GREEN_STROKE,
+        strokeWidth: 2,
+        radius: 8,
+        textOptions: { font: "bold 20px sans-serif", color: "#ffffff" },
+        onClick: () => this._toggleReady(),
+      });
+      this.readyBtn.visible = false;
+      screen.add(this.readyBtn);
+
+      // Placement controls. Three slots on the row, plus a separate
+      // "Place Ships" button when not yet placing.
+      this.placeBtn = new Button({
+        x: W / 2 - 220, y: actionY, w: 440, h: 56,
+        text: "Place Ships",
+        fill: BTN_BLUE_FILL,
+        stroke: BTN_BLUE_STROKE,
+        strokeWidth: 2,
+        radius: 8,
+        textOptions: { font: "bold 20px sans-serif", color: "#ffffff" },
+        onClick: () => this._beginPlacement(),
+      });
+      this.placeBtn.visible = false;
+      screen.add(this.placeBtn);
+
+      this.lockBtn = new Button({
+        x: 40, y: actionY, w: 200, h: 56,
+        text: "Lock In",
+        fill: BTN_GREEN_FILL,
+        stroke: BTN_GREEN_STROKE,
+        strokeWidth: 2,
+        radius: 8,
+        textOptions: { font: "bold 20px sans-serif", color: "#ffffff" },
+        onClick: () => this._lockIn(),
+      });
+      this.lockBtn.visible = false;
+      screen.add(this.lockBtn);
+
+      this.rotateBtn = new Button({
+        x: 260, y: actionY, w: 200, h: 56,
+        text: "Rotate",
+        fill: BTN_DARK_FILL,
+        stroke: BTN_DARK_STROKE,
+        strokeWidth: 2,
+        radius: 8,
+        textOptions: { font: "bold 20px sans-serif", color: "#ffffff" },
+        onClick: () => this._rotatePlace(),
+      });
+      this.rotateBtn.visible = false;
+      screen.add(this.rotateBtn);
+
+      this.nextBtn = new Button({
+        x: 480, y: actionY, w: 200, h: 56,
+        text: "Next",
+        fill: BTN_GREEN_FILL,
+        stroke: BTN_GREEN_STROKE,
+        strokeWidth: 2,
+        radius: 8,
+        textOptions: { font: "bold 20px sans-serif", color: "#ffffff" },
+        onClick: () => this._nextPlace(),
+      });
+      this.nextBtn.visible = false;
+      screen.add(this.nextBtn);
+
+      this.resetBtn = new Button({
+        x: 260, y: actionY, w: 200, h: 56,
+        text: "Reset",
+        fill: BTN_DARK_FILL,
+        stroke: BTN_DARK_STROKE,
+        strokeWidth: 2,
+        radius: 8,
+        textOptions: { font: "bold 20px sans-serif", color: "#ffffff" },
+        onClick: () => this._resetPlacement(),
+      });
+      this.resetBtn.visible = false;
+      screen.add(this.resetBtn);
+
+      this.fireBtn = new Button({
+        x: W / 2 - 120, y: actionY, w: 240, h: 56,
+        text: "Fire!",
+        fill: BTN_RED_FILL,
+        stroke: BTN_RED_STROKE,
+        strokeWidth: 2,
+        radius: 8,
+        textOptions: { font: "bold 24px sans-serif", color: "#ffffff" },
+        onClick: () => this._fireLockedShot(),
+      });
+      this.fireBtn.visible = false;
+      screen.add(this.fireBtn);
+    } else {
+      this.voteMeBtn = new Button({
+        x: W / 2 - 310, y: actionY, w: 200, h: 52,
+        text: "Me",
+        fill: BTN_BLUE_FILL,
+        stroke: BTN_BLUE_STROKE,
+        strokeWidth: 2,
+        radius: 8,
+        textOptions: { font: "bold 18px sans-serif", color: "#ffffff" },
+        onClick: () => this._setVote("me"),
+      });
+      this.voteMeBtn.visible = false;
+      screen.add(this.voteMeBtn);
+
+      this.voteDeferBtn = new Button({
+        x: W / 2 - 100, y: actionY, w: 200, h: 52,
+        text: "Defer",
+        fill: BTN_BLUE_FILL,
+        stroke: BTN_BLUE_STROKE,
+        strokeWidth: 2,
+        radius: 8,
+        textOptions: { font: "bold 18px sans-serif", color: "#ffffff" },
+        onClick: () => this._setVote("defer"),
+      });
+      this.voteDeferBtn.visible = false;
+      screen.add(this.voteDeferBtn);
+
+      this.readyBtn = new Button({
+        x: W / 2 + 110, y: actionY, w: 200, h: 52,
+        text: "Ready",
+        fill: BTN_GREEN_FILL,
+        stroke: BTN_GREEN_STROKE,
+        strokeWidth: 2,
+        radius: 8,
+        textOptions: { font: "bold 18px sans-serif", color: "#ffffff" },
+        onClick: () => this._toggleReady(),
+      });
+      this.readyBtn.visible = false;
+      screen.add(this.readyBtn);
+
+      this.lockBtn = new Button({
+        x: W / 2 - 340, y: actionY, w: 200, h: 52,
+        text: "Lock In",
+        fill: BTN_GREEN_FILL,
+        stroke: BTN_GREEN_STROKE,
+        strokeWidth: 2,
+        radius: 8,
+        textOptions: { font: "bold 18px sans-serif", color: "#ffffff" },
+        onClick: () => this._lockIn(),
+      });
+      this.lockBtn.visible = false;
+      screen.add(this.lockBtn);
+
+      this.rotateBtn = new Button({
+        x: W / 2 - 120, y: actionY, w: 240, h: 52,
+        text: "Rotate (R)",
+        fill: BTN_DARK_FILL,
+        stroke: BTN_DARK_STROKE,
+        strokeWidth: 2,
+        radius: 8,
+        textOptions: { font: "bold 18px sans-serif", color: "#ffffff" },
+        onClick: () => this._rotatePlace(),
+      });
+      this.rotateBtn.visible = false;
+      screen.add(this.rotateBtn);
+
+      this.resetBtn = new Button({
+        x: W / 2 + 140, y: actionY, w: 200, h: 52,
+        text: "Reset",
+        fill: BTN_DARK_FILL,
+        stroke: BTN_DARK_STROKE,
+        strokeWidth: 2,
+        radius: 8,
+        textOptions: { font: "bold 18px sans-serif", color: "#ffffff" },
+        onClick: () => this._resetPlacement(),
+      });
+      this.resetBtn.visible = false;
+      screen.add(this.resetBtn);
+
+      this.placeBtn = new Button({
+        x: W / 2 - 160, y: actionY, w: 320, h: 52,
+        text: "Place Ships",
+        fill: BTN_BLUE_FILL,
+        stroke: BTN_BLUE_STROKE,
+        strokeWidth: 2,
+        radius: 8,
+        textOptions: { font: "bold 18px sans-serif", color: "#ffffff" },
+        onClick: () => this._beginPlacement(),
+      });
+      this.placeBtn.visible = false;
+      screen.add(this.placeBtn);
+
+      this.fireBtn = new Button({
+        x: W / 2 - 110, y: actionY, w: 220, h: 52,
+        text: "Fire!",
+        fill: BTN_RED_FILL,
+        stroke: BTN_RED_STROKE,
+        strokeWidth: 2,
+        radius: 8,
+        textOptions: { font: "bold 22px sans-serif", color: "#ffffff" },
+        onClick: () => this._fireLockedShot(),
+      });
+      this.fireBtn.visible = false;
+      screen.add(this.fireBtn);
+
+      // Desktop has no Next button.
+      this.nextBtn = null;
+
+      // Desktop has no D-pad or Show Controls toggle.
+      this.controlsToggle = null;
+      this.dpadButtons = [];
+    }
+
+    // Outcome banner (both). Shown between the boards and the action
+    // row while waiting for both fleets.
+    this.outcomeLabel = new Text({
+      x: W / 2,
+      y: actionY - 30,
+      text: "",
+      font: "bold 16px sans-serif",
+      color: "#a0c0ff",
+      align: "center",
+      baseline: "middle",
+    });
+    this.outcomeLabel.visible = false;
+    screen.add(this.outcomeLabel);
   }
 
   _buildChatPanel(screen) {
     const W = Viewport.width;
     const H = Viewport.height;
 
-    const pw = 420;
-    const ph = 320;
-    const px = W - pw - 20;
-    const py = H - ph - 120;
-
-    const panel = new Panel({
-      x: px, y: py, w: pw, h: ph,
-      fill: "#0d1216",
-      stroke: "#3a4d70",
-      strokeWidth: 2,
-      radius: 8,
-    });
-    panel.visible = false;
-    screen.add(panel);
-
-    this.chatPanel = panel;
-
-    panel.add(new Text({
-      x: 12, y: 10,
-      text: "Room Chat",
-      font: "bold 14px sans-serif",
-      color: "#8fa9d0",
-      align: "left",
-      baseline: "top",
-    }));
-
-    panel.add(new Button({
-      x: pw - 84, y: 6, w: 72, h: 26,
-      text: "Hide",
-      fill: "#2a2a3a",
-      stroke: "#5a5a7a",
-      strokeWidth: 1,
-      radius: 4,
-      textOptions: { font: "bold 12px sans-serif", color: "#ffffff" },
-      onClick: () => this._toggleChat(),
-    }));
-
-    const logX = 12;
-    const logY = 40;
-    const logW = pw - 24;
-    const logH = ph - 40 - 60;
-
-    this._chatLogW = logW;
-    this._chatMaxLines = Math.floor((logH - 8) / 18);
-
-    this.chatMessageTexts = [];
-    for (let i = 0; i < this._chatMaxLines; i++) {
-      const t = new Text({
-        x: logX + 4,
-        y: logY + 4 + i * 18,
-        text: "",
-        font: "13px monospace",
-        color: "#c8d0d8",
-        align: "left",
-        baseline: "top",
+    if (this.mobile) {
+      // Full-screen overlay. Everything except the Chat button.
+      const panel = new Panel({
+        x: 0, y: 0, w: W, h: H,
+        fill: "#0d1216",
+        stroke: null,
       });
-      panel.add(t);
-      this.chatMessageTexts.push(t);
-    }
+      panel.visible = false;
+      screen.add(panel);
+      this.chatPanel = panel;
 
-    const rowY = ph - 48;
-    const inputX = 12;
-    const inputW = pw - 24 - 96 - 8;
-
-    const inputPanel = new Panel({
-      x: inputX, y: rowY,
-      w: inputW, h: 36,
-      fill: "#0a1018",
-      stroke: "#2a3552",
-      strokeWidth: 1,
-      radius: 4,
-    });
-    panel.add(inputPanel);
-
-    this.inputLabel = new Label({
-      x: 0, y: 0, w: "100%", h: "100%",
-      text: "",
-      textOptions: {
-        font: "14px monospace",
-        color: "#d8e4f7",
+      const titleY = 30;
+      panel.add(new Text({
+        x: 20, y: titleY,
+        text: "Room Chat",
+        font: "bold 20px sans-serif",
+        color: "#8fa9d0",
         align: "left",
         baseline: "middle",
-      },
-    });
-    this.inputLabel.text.x = 8;
-    this.inputLabel.text.y = "50%";
-    inputPanel.add(this.inputLabel);
+      }));
 
-    this.sendBtn = new Button({
-      x: pw - 12 - 96, y: rowY, w: 96, h: 36,
-      text: "Send",
-      fill: "#2a4a2a",
-      stroke: "#6a9a6a",
-      strokeWidth: 1,
-      radius: 4,
-      textOptions: { font: "bold 14px sans-serif", color: "#ffffff" },
-      onClick: () => this._sendChat(),
-    });
-    panel.add(this.sendBtn);
+      // Keyboard at the bottom.
+      const kbMargin = 40;
+      const kbW      = W - kbMargin * 2;
+      const kbX      = kbMargin;
 
-    this._chatPanelX = px;
-    this._chatPanelY = py;
-    this._chatPanelW = pw;
-    this._chatPanelH = ph;
+      this.chatKeyboard = new Keyboard({
+        x: kbX, y: 0,
+        w: kbW,
+        onKey: (char) => this._handleChatKey({ key: char, length: 1 }),
+      });
+      const kbH = this.chatKeyboard.h;
+      const kbY = H - kbH - 20;
+      this.chatKeyboard.x = kbX;
+      this.chatKeyboard.y = kbY;
+      this.chatKeyboard.visible = false;
+      panel.add(this.chatKeyboard);
+
+      // Input row above the keyboard.
+      const rowY = kbY - 70;
+      const inputX = 20;
+      const sendW  = 110;
+      const inputW = W - 40 - sendW - 12;
+
+      const inputPanel = new Panel({
+        x: inputX, y: rowY,
+        w: inputW, h: 56,
+        fill: "#0a1018",
+        stroke: "#2a3552",
+        strokeWidth: 2,
+        radius: 6,
+      });
+      panel.add(inputPanel);
+
+      this.inputLabel = new Label({
+        x: 0, y: 0, w: "100%", h: "100%",
+        text: "",
+        textOptions: {
+          font: "18px monospace",
+          color: "#d8e4f7",
+          align: "left",
+          baseline: "middle",
+        },
+      });
+      this.inputLabel.text.x = 12;
+      this.inputLabel.text.y = "50%";
+      inputPanel.add(this.inputLabel);
+
+      this.sendBtn = new Button({
+        x: W - 20 - sendW, y: rowY, w: sendW, h: 56,
+        text: "Send",
+        fill: BTN_GREEN_FILL,
+        stroke: BTN_GREEN_STROKE,
+        strokeWidth: 2,
+        radius: 6,
+        textOptions: { font: "bold 20px sans-serif", color: "#ffffff" },
+        onClick: () => this._sendChat(),
+      });
+      panel.add(this.sendBtn);
+
+      // Log above the input row.
+      const logX = 20;
+      const logY = 60;
+      const logW = W - 40;
+      const logH = rowY - logY - 12;
+
+      this._chatMaxLines = Math.floor((logH - 8) / 22);
+
+      this.chatMessageTexts = [];
+      for (let i = 0; i < this._chatMaxLines; i++) {
+        const t = new Text({
+          x: logX + 4,
+          y: logY + 4 + i * 22,
+          text: "",
+          font: "16px monospace",
+          color: "#c8d0d8",
+          align: "left",
+          baseline: "top",
+        });
+        panel.add(t);
+        this.chatMessageTexts.push(t);
+      }
+    } else {
+      const pw = 420;
+      const ph = 320;
+      const px = W - pw - 20;
+      const py = H - ph - 120;
+
+      const panel = new Panel({
+        x: px, y: py, w: pw, h: ph,
+        fill: "#0d1216",
+        stroke: "#3a4d70",
+        strokeWidth: 2,
+        radius: 8,
+      });
+      panel.visible = false;
+      screen.add(panel);
+
+      this.chatPanel = panel;
+
+      panel.add(new Text({
+        x: 12, y: 10,
+        text: "Room Chat",
+        font: "bold 14px sans-serif",
+        color: "#8fa9d0",
+        align: "left",
+        baseline: "top",
+      }));
+
+      panel.add(new Button({
+        x: pw - 84, y: 6, w: 72, h: 26,
+        text: "Hide",
+        fill: BTN_DARK_FILL,
+        stroke: BTN_DARK_STROKE,
+        strokeWidth: 1,
+        radius: 4,
+        textOptions: { font: "bold 12px sans-serif", color: "#ffffff" },
+        onClick: () => this._toggleChat(),
+      }));
+
+      const logX = 12;
+      const logY = 40;
+      const logW = pw - 24;
+      const logH = ph - 40 - 60;
+
+      this._chatLogW = logW;
+      this._chatMaxLines = Math.floor((logH - 8) / 18);
+
+      this.chatMessageTexts = [];
+      for (let i = 0; i < this._chatMaxLines; i++) {
+        const t = new Text({
+          x: logX + 4,
+          y: logY + 4 + i * 18,
+          text: "",
+          font: "13px monospace",
+          color: "#c8d0d8",
+          align: "left",
+          baseline: "top",
+        });
+        panel.add(t);
+        this.chatMessageTexts.push(t);
+      }
+
+      const rowY = ph - 48;
+      const inputX = 12;
+      const inputW = pw - 24 - 96 - 8;
+
+      const inputPanel = new Panel({
+        x: inputX, y: rowY,
+        w: inputW, h: 36,
+        fill: "#0a1018",
+        stroke: "#2a3552",
+        strokeWidth: 1,
+        radius: 4,
+      });
+      panel.add(inputPanel);
+
+      this.inputLabel = new Label({
+        x: 0, y: 0, w: "100%", h: "100%",
+        text: "",
+        textOptions: {
+          font: "14px monospace",
+          color: "#d8e4f7",
+          align: "left",
+          baseline: "middle",
+        },
+      });
+      this.inputLabel.text.x = 8;
+      this.inputLabel.text.y = "50%";
+      inputPanel.add(this.inputLabel);
+
+      this.sendBtn = new Button({
+        x: pw - 12 - 96, y: rowY, w: 96, h: 36,
+        text: "Send",
+        fill: BTN_GREEN_FILL,
+        stroke: BTN_GREEN_STROKE,
+        strokeWidth: 1,
+        radius: 4,
+        textOptions: { font: "bold 14px sans-serif", color: "#ffffff" },
+        onClick: () => this._sendChat(),
+      });
+      panel.add(this.sendBtn);
+
+      this.chatKeyboard = null;
+    }
   }
 
   // ---------- Screen navigation ----------
@@ -1566,13 +1900,16 @@ export class Battleship extends App {
       this.placeIdx  = 0;
       this.placeRot  = false;
       this.myFleet   = null;
+      this._placePreview = null;
       this.fireCursor = { x: 0, y: 0 };
       this.lockedShot = null;
       this.lastFeedback = "";
       this.myVote  = null;
       this.myReady = false;
       this.chatOpen = false;
+      this.controlsVisible = false;
       if (this.chatPanel) this.chatPanel.visible = false;
+      if (this.chatKeyboard) this.chatKeyboard.visible = false;
       this.unread = 0;
 
       this._pushScreen("game");
@@ -1643,10 +1980,6 @@ export class Battleship extends App {
     this._refreshCountdown();
   }
 
-  // Force a cycle to run right now, cancelling the pending timer.
-  // Used after a successful vote or ready write so the handshake
-  // resolves without waiting up to a full cycle interval. One extra
-  // cycle per explicit user action; bounded by clicks.
   _kickCycle() {
     if (this.room === null) return;
     if (this._cycleTimer) {
@@ -1719,16 +2052,10 @@ export class Battleship extends App {
       this.game = this._decodeGame(gameContent);
 
       // Resolve the first-turn handshake if the game has not yet
-      // started and both votes and both ready flags are in. Only the
-      // first writer to reach here flips started; the other sees
-      // started=1 on their next cycle and no-ops. The build callback
-      // re-decodes currentContent so a conflict retry applies to the
-      // freshest file.
-      //
-      // The resolved object is captured in `resolvedGame` and then
-      // assigned to this.game after a successful write, so the client
-      // that performs the resolve sees the outcome in the SAME cycle
-      // it resolved (instead of one cycle behind).
+      // started and both votes and both ready flags are in. The
+      // resolved object is captured and assigned to this.game after
+      // a successful write, so the client that performs the resolve
+      // sees the outcome in the SAME cycle it resolved.
       const needsResolve = this.game
         && !this.game.started
         && this.game.voteP0 && this.game.voteP1
@@ -1907,37 +2234,7 @@ export class Battleship extends App {
   // Game state encoding.
   //
   // Load-bearing format. If FLEET changes, _encodeGame and _decodeGame
-  // must change together.
-  //
-  // Line-oriented. "#" starts a section.
-  //
-  //   #META
-  //   started=0|1
-  //   turn=0|1|-1
-  //   turnCount=<int>
-  //   winner=0|1|-1
-  //   firstMode=p1|p2|coin
-  //   voteP0=me|defer|
-  //   voteP1=me|defer|
-  //   readyP0=0|1
-  //   readyP1=0|1
-  //   #PLAYER 0
-  //   name=<username>
-  //   fleet=<cells>;<cells>;...
-  //   shots=<x,y,hit>|<x,y,hit>|...
-  //   #PLAYER 1
-  //   ...
-  //
-  // A cell is "x,y". Ships are ";" separated, cells inside a ship are
-  // ":" separated. Shots are "|" separated.
-  //
-  // turnCount increments only on writes that flip the turn: the start
-  // commit and any miss. A hit does not flip the turn, so turnCount
-  // does not advance. Clients use it to detect that the turn has moved
-  // since they last read, independent of the turn value itself.
-  //
-  // voteP0 / voteP1 / readyP0 / readyP1 are the first-turn handshake.
-  // They are cleared in the same write that sets started=1.
+  // must change together. See the header comment for the full layout.
   // =================================================================
 
   _encodeGame(g) {
@@ -2071,7 +2368,7 @@ export class Battleship extends App {
     if (this._votingWrite) return;
     if (!this.game) return;
     if (this.game.started) return;
-    if (this.myReady) return;   // vote locked once ready
+    if (this.myReady) return;
 
     this._votingWrite = true;
     this._setStatus("Recording vote...");
@@ -2189,8 +2486,6 @@ export class Battleship extends App {
     }
   }
 
-  // Read game.txt fresh and update this.game. Used after a write so
-  // the local mirror reflects what actually landed on disk.
   async _refreshGameMirror() {
     const self = this;
     await this._serialize(async () => {
@@ -2214,6 +2509,7 @@ export class Battleship extends App {
     this.placeIdx  = 0;
     this.placeRot  = false;
     this.myFleet   = null;
+    this._placePreview = null;
     this.hoverCell = { x: 0, y: 0 };
     this.lockedShot = null;
     this._renderAll();
@@ -2222,6 +2518,12 @@ export class Battleship extends App {
   _rotatePlace() {
     if (!this.placing) return;
     this.placeRot = !this.placeRot;
+
+    // If a preview exists, re-render it in the new orientation at
+    // the same anchor.
+    if (this._placePreview) {
+      this._placePreview.horiz = !this.placeRot;
+    }
     this._renderAll();
   }
 
@@ -2230,6 +2532,30 @@ export class Battleship extends App {
     this.placeIdx = 0;
     this.placeRot = false;
     this.myFleet  = null;
+    this._placePreview = null;
+    this._renderAll();
+  }
+
+  // Next: commit the current ship's placement locally (no git) and
+  // advance. Valid only when a valid preview exists at the anchor.
+  _nextPlace() {
+    if (!this.placing) return;
+    if (this.placeIdx >= FLEET.length) return;
+
+    const preview = this._placePreview;
+    if (!preview) return;
+
+    const ship  = FLEET[this.placeIdx];
+    const cells = this._cellsFor(ship.len, preview.x, preview.y, preview.horiz);
+    if (!this._cellsValid(cells, this.myFleet)) return;
+
+    if (!this.myFleet) this.myFleet = [];
+    this.myFleet.push({ name: ship.name, len: ship.len, cells });
+    this.placeIdx++;
+    this._placePreview = null;
+
+    // If that was the last ship, the row changes: Rotate becomes
+    // Reset. _renderButtons handles the visibility.
     this._renderAll();
   }
 
@@ -2260,7 +2586,7 @@ export class Battleship extends App {
     if (!this.placing) return;
     if (this.placeIdx >= FLEET.length) return;
     const ship = FLEET[this.placeIdx];
-    const cells = this._cellsFor(ship.len, cx, cy, this.placeRot);
+    const cells = this._cellsFor(ship.len, cx, cy, !this.placeRot);
     if (!this._cellsValid(cells, this.myFleet)) return;
     if (!this.myFleet) this.myFleet = [];
     this.myFleet.push({ name: ship.name, len: ship.len, cells });
@@ -2268,14 +2594,11 @@ export class Battleship extends App {
     this._renderAll();
   }
 
-  // All FLEET ships placed (locally).
   _allShipsPlaced() {
     if (!this.myFleet) return false;
     return this.myFleet.length === FLEET.length;
   }
 
-  // This client has already locked its fleet in, and the on-disk game
-  // has a full fleet for this slot.
   _iHaveLockedIn() {
     if (!this.game || !this.game.players) return false;
     const me = this.game.players["p" + this.slot];
@@ -2330,6 +2653,7 @@ export class Battleship extends App {
       await this._refreshGameMirror();
 
       this.placing = false;
+      this._placePreview = null;
       this._setStatus("");
       this._renderAll();
     } catch (e) {
@@ -2368,6 +2692,9 @@ export class Battleship extends App {
     return hits >= total;
   }
 
+  // Desktop lock/unlock rule: two-click behavior with the yellow cell.
+  // Mobile: no lock concept; tap/drag just moves the cursor and Fire
+  // commits. _canFireNow gates both.
   _lockShotAt(cx, cy) {
     if (!this._canFireNow()) return;
 
@@ -2404,13 +2731,32 @@ export class Battleship extends App {
     return true;
   }
 
+  // Nudge the fire cursor by direction. Used by the mobile D-pad.
+  _nudgeFireCursor(dir) {
+    if (!this._canFireNow()) return;
+    const c = this.fireCursor;
+    if (dir === "up")    c.y = Math.max(0, c.y - 1);
+    if (dir === "down")  c.y = Math.min(BOARD_H - 1, c.y + 1);
+    if (dir === "left")  c.x = Math.max(0, c.x - 1);
+    if (dir === "right") c.x = Math.min(BOARD_W - 1, c.x + 1);
+    this._renderAll();
+  }
+
   async _fireLockedShot() {
-    if (!this.lockedShot) return;
     if (!this._canFireNow()) return;
     if (this._firing) return;
 
-    const cx = this.lockedShot.x;
-    const cy = this.lockedShot.y;
+    // Target cell: desktop uses the locked shot; mobile uses the
+    // cursor position directly.
+    let cx, cy;
+    if (this.mobile) {
+      cx = this.fireCursor.x;
+      cy = this.fireCursor.y;
+    } else {
+      if (!this.lockedShot) return;
+      cx = this.lockedShot.x;
+      cy = this.lockedShot.y;
+    }
 
     this._firing = true;
     this._awaitingFire = true;
@@ -2498,9 +2844,19 @@ export class Battleship extends App {
 
   _toggleChat() {
     this.chatOpen = !this.chatOpen;
+
     if (this.chatPanel) {
       this.chatPanel.visible = this.chatOpen;
     }
+    if (this.chatKeyboard) {
+      this.chatKeyboard.visible = this.chatOpen;
+    }
+
+    // Chat button label toggles.
+    if (this.chatBtn) {
+      this.chatBtn.setText(this.chatOpen ? "Hide" : "Chat");
+    }
+
     if (this.chatOpen) {
       this.unread = 0;
       this._seenChatCount = this.chatLines.length;
@@ -2515,7 +2871,6 @@ export class Battleship extends App {
     if (!this.chatMessageTexts) return;
     const max = this.chatMessageTexts.length;
 
-    // Take the last N raw lines, parse each, format for display.
     const rawLines = this.chatLines.slice(-max);
     for (let i = 0; i < max; i++) {
       const t = this.chatMessageTexts[i];
@@ -2526,11 +2881,11 @@ export class Battleship extends App {
       }
       const parsed = this._parseChatLine(raw);
       if (!parsed) {
-        t.text = truncate(raw, 52);
+        t.text = truncate(raw, this.mobile ? 40 : 52);
         continue;
       }
       const line = "[" + formatTime(parsed.iso) + "]" + parsed.username + ":" + parsed.text;
-      t.text = truncate(line, 52);
+      t.text = truncate(line, this.mobile ? 40 : 52);
     }
   }
 
@@ -2705,9 +3060,20 @@ export class Battleship extends App {
       }
     }
 
+    // Placement preview (desktop hover cell OR mobile drag preview).
     if (this.placing && this.placeIdx < FLEET.length) {
-      const ship = FLEET[this.placeIdx];
-      const cells = this._cellsFor(ship.len, this.hoverCell.x, this.hoverCell.y, this.placeRot);
+      let anchor, horiz;
+      if (this.mobile) {
+        if (!this._placePreview) return;
+        anchor = { x: this._placePreview.x, y: this._placePreview.y };
+        horiz  = this._placePreview.horiz;
+      } else {
+        anchor = { x: this.hoverCell.x, y: this.hoverCell.y };
+        horiz  = !this.placeRot;
+      }
+
+      const ship  = FLEET[this.placeIdx];
+      const cells = this._cellsFor(ship.len, anchor.x, anchor.y, horiz);
       const valid = this._cellsValid(cells, this.myFleet);
       for (const c of cells) {
         if (c.x < 0 || c.y < 0 || c.x >= BOARD_W || c.y >= BOARD_H) continue;
@@ -2747,6 +3113,24 @@ export class Battleship extends App {
 
     if (!this._canFireNow()) return;
 
+    // Mobile: only the cursor. The cursor IS the choice; Fire
+    // commits at its cell.
+    if (this.mobile) {
+      const c = this.fireCursor;
+      this.opLayer.add(new Rect({
+        x: c.x * cell + 2,
+        y: c.y * cell + 2,
+        w: cell - 4,
+        h: cell - 4,
+        fill: "#ffffff",
+        stroke: "#ffd060",
+        strokeWidth: 2,
+      }));
+      return;
+    }
+
+    // Desktop: locked-shot yellow cell takes precedence; otherwise
+    // draw the cursor outline.
     if (this.lockedShot) {
       this.opLayer.add(new Rect({
         x: this.lockedShot.x * cell + 2,
@@ -2783,6 +3167,7 @@ export class Battleship extends App {
     const placeCtl     = this.placing;
     const firePhase    = this._canFireNow();
 
+    // Vote buttons.
     this.voteMeBtn.visible    = !!votePhase;
     this.voteDeferBtn.visible = !!votePhase;
     this.readyBtn.visible     = !!votePhase;
@@ -2815,31 +3200,125 @@ export class Battleship extends App {
       }
     }
 
+    // Place Ships entry.
     this.placeBtn.visible = !!placeEntry;
 
-    this.rotateBtn.visible = !!placeCtl;
-    this.resetBtn.visible  = !!placeCtl;
+    // Placement controls.
+    const allPlaced = this._allShipsPlaced();
 
-    this.lockBtn.visible = !!placeCtl || (gameStarted && this._iHaveLockedIn() && !this._bothFleetsIn());
-
-    if (this.lockBtn.visible) {
-      const placed  = this._allShipsPlaced();
-      const locked  = this._iHaveLockedIn();
-
-      if (locked) {
-        this.lockBtn.setText("Locked In!");
-        this.lockBtn.setBaseStyle({ fill: BTN_RED_FILL, stroke: BTN_RED_STROKE });
-      } else {
-        this.lockBtn.setText("Lock In");
-        if (placed) {
+    // Desktop placement row: Lock In / Rotate / Reset.
+    // Mobile placement row: Lock In / Rotate / Next, and when all
+    // ships are placed: Lock In / Reset (Rotate becomes Reset).
+    if (this.mobile) {
+      if (placeCtl) {
+        this.lockBtn.visible = true;
+        if (allPlaced) {
+          // All ships placed. Lock In is green; Rotate is now Reset.
+          this.lockBtn.setText("Lock In");
           this.lockBtn.setBaseStyle({ fill: BTN_GREEN_FILL, stroke: BTN_GREEN_STROKE });
+
+          this.rotateBtn.visible = false;
+          this.nextBtn.visible   = false;
+          this.resetBtn.visible  = true;
         } else {
+          // Mid-placement. Lock In is greyed (nothing to lock in
+          // until all ships placed). Rotate and Next are visible.
+          // Next is greyed until a valid preview exists.
+          this.lockBtn.setText("Lock In");
           this.lockBtn.setBaseStyle({ fill: BUSY_FILL, stroke: BUSY_STROKE });
+
+          this.rotateBtn.visible = true;
+          this.rotateBtn.setText("Rotate");
+          this.rotateBtn.setBaseStyle({ fill: BTN_DARK_FILL, stroke: BTN_DARK_STROKE });
+
+          const previewValid = this._previewIsValid();
+
+          this.nextBtn.visible = true;
+          this.nextBtn.setText("Next");
+          if (previewValid) {
+            this.nextBtn.setBaseStyle({ fill: BTN_GREEN_FILL, stroke: BTN_GREEN_STROKE });
+          } else {
+            this.nextBtn.setBaseStyle({ fill: BUSY_FILL, stroke: BUSY_STROKE });
+          }
+
+          this.resetBtn.visible = false;
         }
+      } else {
+        // Not placing. Lock In may still be shown if this player has
+        // locked in and is waiting for the opponent.
+        const waiting = gameStarted && this._iHaveLockedIn() && !this._bothFleetsIn();
+        if (waiting) {
+          this.lockBtn.visible = true;
+          this.lockBtn.setText("Locked In!");
+          this.lockBtn.setBaseStyle({ fill: BTN_RED_FILL, stroke: BTN_RED_STROKE });
+        } else {
+          this.lockBtn.visible = false;
+        }
+        this.rotateBtn.visible = false;
+        this.nextBtn.visible   = false;
+        this.resetBtn.visible  = false;
+      }
+    } else {
+      // Desktop.
+      this.rotateBtn.visible = !!placeCtl;
+      this.resetBtn.visible  = !!placeCtl;
+
+      const showLock = !!placeCtl
+        || (gameStarted && this._iHaveLockedIn() && !this._bothFleetsIn());
+      this.lockBtn.visible = showLock;
+
+      if (showLock) {
+        const locked = this._iHaveLockedIn();
+        if (locked) {
+          this.lockBtn.setText("Locked In!");
+          this.lockBtn.setBaseStyle({ fill: BTN_RED_FILL, stroke: BTN_RED_STROKE });
+        } else {
+          this.lockBtn.setText("Lock In");
+          if (allPlaced) {
+            this.lockBtn.setBaseStyle({ fill: BTN_GREEN_FILL, stroke: BTN_GREEN_STROKE });
+          } else {
+            this.lockBtn.setBaseStyle({ fill: BUSY_FILL, stroke: BUSY_STROKE });
+          }
+        }
+      }
+
+      if (this.rotateBtn.visible) {
+        this.rotateBtn.setText("Rotate (R)");
+        this.rotateBtn.setBaseStyle({ fill: BTN_DARK_FILL, stroke: BTN_DARK_STROKE });
+      }
+      if (this.resetBtn.visible) {
+        this.resetBtn.setBaseStyle({ fill: BTN_DARK_FILL, stroke: BTN_DARK_STROKE });
       }
     }
 
-    this.fireBtn.visible = !!(firePhase && this.lockedShot);
+    // Fire button.
+    this.fireBtn.visible = !!firePhase && (this.mobile || !!this.lockedShot);
+
+    // Show Controls / D-pad. Mobile, fire phase only.
+    if (this.mobile) {
+      if (this.controlsToggle) {
+        if (firePhase) {
+          this.controlsToggle.visible = true;
+          this.controlsToggle.setText(this.controlsVisible ? "Hide Controls" : "Show Controls");
+        } else {
+          this.controlsToggle.visible = false;
+        }
+      }
+      for (const b of this.dpadButtons) {
+        b.visible = !!firePhase && this.controlsVisible;
+      }
+    }
+  }
+
+  // Is the current placement preview a valid ship position?
+  _previewIsValid() {
+    if (!this.placing) return false;
+    if (this.placeIdx >= FLEET.length) return false;
+    if (!this._placePreview) return false;
+
+    const ship  = FLEET[this.placeIdx];
+    const cells = this._cellsFor(ship.len, this._placePreview.x, this._placePreview.y, this._placePreview.horiz);
+    return this._cellsValid(cells, this.myFleet);
   }
 
   _renderOutcomeBanner() {
@@ -2863,9 +3342,9 @@ export class Battleship extends App {
 
     if (g.firstMode === "coin") {
       if (myVote === "me") {
-        msg = "Both players chose Me; coinflip -> " + firstPlayerNum + " goes first!";
+        msg = "Both chose Me; coinflip -> " + firstPlayerNum + " first!";
       } else {
-        msg = "Both players chose Defer; coinflip -> " + firstPlayerNum + " goes first!";
+        msg = "Both chose Defer; coinflip -> " + firstPlayerNum + " first!";
       }
     } else {
       if (iGoFirst) {
@@ -2894,9 +3373,16 @@ export class Battleship extends App {
     if (top === "room") return;
 
     if (top === "game") {
+      if (this.chatOpen) {
+        if (e.type === "keydown") this._handleChatKey(e);
+        return;
+      }
+
       if (e.type === "keydown") this._handleGameKey(e);
       else if (e.type === "mousemove") this._handleGameMouseMove(e);
       else if (e.type === "mousedown") this._handleGameMouseDown(e);
+      else if (e.type === "mouseup")   this._handleGameMouseUp(e);
+      else if (e.type === "mouseleave") this._handleGameMouseLeave(e);
     }
   }
 
@@ -2916,32 +3402,56 @@ export class Battleship extends App {
     }
   }
 
+  _handleChatKey(e) {
+    if (e.key === "Backspace") {
+      this.inputText = this.inputText.slice(0, -1);
+      this._refreshChatInput();
+      return;
+    }
+    if (e.key === "Enter") {
+      this._sendChat();
+      return;
+    }
+    if (e.key.length === 1) {
+      this.inputText += e.key;
+      this._refreshChatInput();
+    }
+  }
+
   _handleGameKey(e) {
     const k = e.key;
 
-    if (this.chatOpen) {
-      if (k === "Escape") { this._toggleChat(); return; }
-      if (k === "Backspace") {
-        this.inputText = this.inputText.slice(0, -1);
-        this._refreshChatInput();
-        return;
-      }
-      if (k === "Enter") { this._sendChat(); return; }
-      if (k.length === 1) {
-        this.inputText += k;
-        this._refreshChatInput();
-        return;
-      }
-      return;
-    }
-
     if (this.placing) {
       if (k === "r" || k === "R") { this._rotatePlace(); return; }
-      if (k === "ArrowLeft" || k === "a" || k === "A") { this.hoverCell.x = Math.max(0, this.hoverCell.x - 1); this._renderAll(); return; }
-      if (k === "ArrowRight" || k === "d" || k === "D") { this.hoverCell.x = Math.min(BOARD_W - 1, this.hoverCell.x + 1); this._renderAll(); return; }
-      if (k === "ArrowUp" || k === "w" || k === "W") { this.hoverCell.y = Math.max(0, this.hoverCell.y - 1); this._renderAll(); return; }
-      if (k === "ArrowDown" || k === "s" || k === "S") { this.hoverCell.y = Math.min(BOARD_H - 1, this.hoverCell.y + 1); this._renderAll(); return; }
-      if (k === "Enter") { this._placeCurrentAt(this.hoverCell.x, this.hoverCell.y); return; }
+      if (k === "ArrowLeft" || k === "a" || k === "A") {
+        if (this.mobile && this._placePreview) this._placePreview.x = Math.max(0, this._placePreview.x - 1);
+        else this.hoverCell.x = Math.max(0, this.hoverCell.x - 1);
+        this._renderAll();
+        return;
+      }
+      if (k === "ArrowRight" || k === "d" || k === "D") {
+        if (this.mobile && this._placePreview) this._placePreview.x = Math.min(BOARD_W - 1, this._placePreview.x + 1);
+        else this.hoverCell.x = Math.min(BOARD_W - 1, this.hoverCell.x + 1);
+        this._renderAll();
+        return;
+      }
+      if (k === "ArrowUp" || k === "w" || k === "W") {
+        if (this.mobile && this._placePreview) this._placePreview.y = Math.max(0, this._placePreview.y - 1);
+        else this.hoverCell.y = Math.max(0, this.hoverCell.y - 1);
+        this._renderAll();
+        return;
+      }
+      if (k === "ArrowDown" || k === "s" || k === "S") {
+        if (this.mobile && this._placePreview) this._placePreview.y = Math.min(BOARD_H - 1, this._placePreview.y + 1);
+        else this.hoverCell.y = Math.min(BOARD_H - 1, this.hoverCell.y + 1);
+        this._renderAll();
+        return;
+      }
+      if (k === "Enter") {
+        if (this.mobile) this._nextPlace();
+        else this._placeCurrentAt(this.hoverCell.x, this.hoverCell.y);
+        return;
+      }
       return;
     }
 
@@ -2950,12 +3460,39 @@ export class Battleship extends App {
       if (k === "ArrowRight" || k === "d" || k === "D") { this.fireCursor.x = Math.min(BOARD_W - 1, this.fireCursor.x + 1); this._renderAll(); return; }
       if (k === "ArrowUp" || k === "w" || k === "W") { this.fireCursor.y = Math.max(0, this.fireCursor.y - 1); this._renderAll(); return; }
       if (k === "ArrowDown" || k === "s" || k === "S") { this.fireCursor.y = Math.min(BOARD_H - 1, this.fireCursor.y + 1); this._renderAll(); return; }
-      if (k === "Enter") { this._lockShotAt(this.fireCursor.x, this.fireCursor.y); return; }
+      if (k === "Enter") {
+        if (this.mobile) this._fireLockedShot();
+        else this._lockShotAt(this.fireCursor.x, this.fireCursor.y);
+        return;
+      }
     }
   }
 
   _handleGameMouseMove(e) {
-    if (this.placing) {
+    // Mobile placement: if dragging, update the preview.
+    if (this.mobile && this.placing && this._dragPlace) {
+      const c = this._cellFromPoint(e.x, e.y, this._myBx, this._myBy);
+      if (c) {
+        this._placePreview = { x: c.x, y: c.y, horiz: !this.placeRot };
+        this._renderAll();
+      }
+      return;
+    }
+
+    // Mobile firing: if dragging, move the cursor.
+    if (this.mobile && this._dragFire) {
+      if (this._canFireNow()) {
+        const c = this._cellFromPoint(e.x, e.y, this._opBx, this._opBy);
+        if (c) {
+          this.fireCursor = c;
+          this._renderAll();
+        }
+      }
+      return;
+    }
+
+    // Desktop placement: hover preview.
+    if (!this.mobile && this.placing) {
       const c = this._cellFromPoint(e.x, e.y, this._myBx, this._myBy);
       if (c) {
         this.hoverCell = c;
@@ -2964,7 +3501,8 @@ export class Battleship extends App {
       return;
     }
 
-    if (this._canFireNow()) {
+    // Desktop firing: hover cursor.
+    if (!this.mobile && this._canFireNow()) {
       const c = this._cellFromPoint(e.x, e.y, this._opBx, this._opBy);
       if (c) {
         this.fireCursor = c;
@@ -2974,7 +3512,19 @@ export class Battleship extends App {
   }
 
   _handleGameMouseDown(e) {
-    if (this.placing) {
+    // Mobile placement.
+    if (this.mobile && this.placing) {
+      const c = this._cellFromPoint(e.x, e.y, this._myBx, this._myBy);
+      if (c) {
+        this._dragPlace = true;
+        this._placePreview = { x: c.x, y: c.y, horiz: !this.placeRot };
+        this._renderAll();
+      }
+      return;
+    }
+
+    // Desktop placement.
+    if (!this.mobile && this.placing) {
       const c = this._cellFromPoint(e.x, e.y, this._myBx, this._myBy);
       if (c) {
         this._placeCurrentAt(c.x, c.y);
@@ -2982,13 +3532,61 @@ export class Battleship extends App {
       }
     }
 
-    if (this._canFireNow()) {
+    // Mobile firing: tap-and-drag moves the cursor; release leaves it.
+    if (this.mobile && this._canFireNow()) {
+      const c = this._cellFromPoint(e.x, e.y, this._opBx, this._opBy);
+      if (c) {
+        this._dragFire = true;
+        this.fireCursor = c;
+        this._renderAll();
+      }
+      return;
+    }
+
+    // Desktop firing: click to lock/unlock (two-click rule).
+    if (!this.mobile && this._canFireNow()) {
       const c = this._cellFromPoint(e.x, e.y, this._opBx, this._opBy);
       if (c) {
         this._lockShotAt(c.x, c.y);
         return;
       }
     }
+  }
+
+  _handleGameMouseUp(e) {
+    // Mobile placement release: the preview stays where it was
+    // released. The player presses Next to commit, or drags again to
+    // move it.
+    if (this.mobile && this.placing && this._dragPlace) {
+      this._dragPlace = false;
+
+      const c = this._cellFromPoint(e.x, e.y, this._myBx, this._myBy);
+      if (c) {
+        this._placePreview = { x: c.x, y: c.y, horiz: !this.placeRot };
+      }
+      this._renderAll();
+      return;
+    }
+
+    // Mobile firing release: cursor stays where the finger lifted.
+    if (this.mobile && this._dragFire) {
+      this._dragFire = false;
+
+      if (this._canFireNow()) {
+        const c = this._cellFromPoint(e.x, e.y, this._opBx, this._opBy);
+        if (c) this.fireCursor = c;
+      }
+      this._renderAll();
+      return;
+    }
+  }
+
+  _handleGameMouseLeave(e) {
+    if (this.mobile) {
+      if (this._dragPlace) this._dragPlace = false;
+      if (this._dragFire)  this._dragFire  = false;
+    }
+    void e;
   }
 
   _cellFromPoint(px, py, bx, by) {
@@ -3000,6 +3598,11 @@ export class Battleship extends App {
     const cy = Math.floor(ly / cell);
     if (cx < 0 || cy < 0 || cx >= BOARD_W || cy >= BOARD_H) return null;
     return { x: cx, y: cy };
+  }
+
+  _toggleControls() {
+    this.controlsVisible = !this.controlsVisible;
+    this._renderAll();
   }
 
   // ---------- Error handling ----------
