@@ -1,13 +1,13 @@
 #META
-started=0
-turn=-1
-turnCount=0
+started=1
+turn=1
+turnCount=1
 winner=-1
-firstMode=
-voteP0=defer
-voteP1=defer
-readyP0=1
-readyP1=1
+firstMode=coin
+voteP0=
+voteP1=
+readyP0=0
+readyP1=0
 #PLAYER 0
 name=
 fleet=
