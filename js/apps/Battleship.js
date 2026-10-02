@@ -174,6 +174,16 @@ function truncate(s, n) {
   return s.slice(0, n);
 }
 
+// Format an ISO timestamp as 24-hour HH:MM:SS. Local time, no date.
+function formatTime(iso) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "??:??:??";
+  const h = String(d.getHours()).padStart(2, "0");
+  const m = String(d.getMinutes()).padStart(2, "0");
+  const s = String(d.getSeconds()).padStart(2, "0");
+  return h + ":" + m + ":" + s;
+}
+
 export class Battleship extends App {
   static displayName = "Battleship";
 
@@ -1714,6 +1724,11 @@ export class Battleship extends App {
       // started=1 on their next cycle and no-ops. The build callback
       // re-decodes currentContent so a conflict retry applies to the
       // freshest file.
+      //
+      // The resolved object is captured in `resolvedGame` and then
+      // assigned to this.game after a successful write, so the client
+      // that performs the resolve sees the outcome in the SAME cycle
+      // it resolved (instead of one cycle behind).
       const needsResolve = this.game
         && !this.game.started
         && this.game.voteP0 && this.game.voteP1
@@ -1728,6 +1743,7 @@ export class Battleship extends App {
         };
 
         const self = this;
+        let resolvedGame = null;
 
         try {
           const result = await this._writeWithRetry(
@@ -1751,12 +1767,16 @@ export class Battleship extends App {
               g.readyP0   = false;
               g.readyP1   = false;
 
+              resolvedGame = g;
               return self._encodeGame(g);
             },
             "resolve first turn",
             hint
           );
           if (result.retried) retried = true;
+          if (result.ok && resolvedGame) {
+            this.game = resolvedGame;
+          }
         } catch (e) {
           if (e && e.message === "BAD_SESSION") throw e;
           // Next cycle retries.
@@ -2489,15 +2509,41 @@ export class Battleship extends App {
     }
   }
 
+  // Render stored chat lines as: [HH:MM:SS]username:text
+  // Storage format is unchanged: username|ISO-timestamp|text
   _renderChatLog() {
     if (!this.chatMessageTexts) return;
     const max = this.chatMessageTexts.length;
-    const lines = this.chatLines.slice(-max);
+
+    // Take the last N raw lines, parse each, format for display.
+    const rawLines = this.chatLines.slice(-max);
     for (let i = 0; i < max; i++) {
       const t = this.chatMessageTexts[i];
-      const line = lines[i];
-      t.text = line ? truncate(line, 52) : "";
+      const raw = rawLines[i];
+      if (!raw) {
+        t.text = "";
+        continue;
+      }
+      const parsed = this._parseChatLine(raw);
+      if (!parsed) {
+        t.text = truncate(raw, 52);
+        continue;
+      }
+      const line = "[" + formatTime(parsed.iso) + "]" + parsed.username + ":" + parsed.text;
+      t.text = truncate(line, 52);
     }
+  }
+
+  _parseChatLine(line) {
+    const first = line.indexOf("|");
+    if (first < 0) return null;
+    const second = line.indexOf("|", first + 1);
+    if (second < 0) return null;
+    const username = line.slice(0, first);
+    const iso      = line.slice(first + 1, second);
+    const text     = line.slice(second + 1);
+    if (!username || !iso) return null;
+    return { username, iso, text };
   }
 
   _renderUnreadBadge() {
@@ -2593,8 +2639,7 @@ export class Battleship extends App {
       return;
     }
 
-    // Started. Header reflects the current phase for THIS player.
-    const iLocked  = this._iHaveLockedIn();
+    const iLocked    = this._iHaveLockedIn();
     const bothLocked = this._bothFleetsIn();
 
     if (!iLocked) {
@@ -2738,7 +2783,6 @@ export class Battleship extends App {
     const placeCtl     = this.placing;
     const firePhase    = this._canFireNow();
 
-    // Vote buttons.
     this.voteMeBtn.visible    = !!votePhase;
     this.voteDeferBtn.visible = !!votePhase;
     this.readyBtn.visible     = !!votePhase;
@@ -2771,17 +2815,11 @@ export class Battleship extends App {
       }
     }
 
-    // Place Ships entry button. Shown when this player has not yet
-    // locked in and is not currently in placement mode.
     this.placeBtn.visible = !!placeEntry;
 
-    // Placement controls.
     this.rotateBtn.visible = !!placeCtl;
     this.resetBtn.visible  = !!placeCtl;
 
-    // Lock In. Visible during placement, and also while waiting for
-    // the opponent after this player has locked in (as a red
-    // "Locked In!").
     this.lockBtn.visible = !!placeCtl || (gameStarted && this._iHaveLockedIn() && !this._bothFleetsIn());
 
     if (this.lockBtn.visible) {
@@ -2839,14 +2877,6 @@ export class Battleship extends App {
 
     this.outcomeLabel.text = msg;
     this.outcomeLabel.visible = true;
-  }
-
-  _playerNeedsFleet() {
-    if (!this.game) return false;
-    const me = this.game.players["p" + this.slot];
-    if (!me) return true;
-    if (!me.fleet || me.fleet.length !== FLEET.length) return true;
-    return false;
   }
 
   // =================================================================
