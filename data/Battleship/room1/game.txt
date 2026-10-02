@@ -6,7 +6,7 @@ winner=-1
 firstMode=
 voteP0=defer
 voteP1=defer
-readyP0=0
+readyP0=1
 readyP1=1
 #PLAYER 0
 name=
