@@ -55,6 +55,26 @@
 // splice and is what keeps two concurrent writers from stomping
 // each other's lines.
 //
+// Slot claiming is the same shape. The slot a joiner takes is
+// decided INSIDE the presence-claim build callback, against the
+// freshest presence content _writeWithRetry has, not against a
+// pre-read taken before the write. Two clients racing to join an
+// empty room both read 0/2, both run the dead-room reset, then both
+// claim. Whichever commits first takes slot 0. The loser's hint
+// misses (or its PATCH conflicts), _writeWithRetry re-reads, and
+// the callback sees slot 0 now occupied and takes slot 1. No
+// explicit race flag, no lock, no claimed-slot register: the shared
+// presence file resolves the race. If the room fills under the
+// callback, it returns null and the join surfaces "Room is full".
+//
+// Boards are built as two frame composites (myFrame, opFrame) plus
+// two content layers (myLayer, opLayer). The frame composites hold
+// the label, the backing panel, and the grid lines. A Flip button
+// swaps the four anchor constants and repositions the four
+// composites, so the convenience flip is a repositioning of
+// existing nodes, not a rebuild. Game logic, slot identity, and
+// hit-test semantics do not change with flip.
+//
 // Mobile pass: the layout branches on Viewport.isMobile. Boards
 // stack vertically. Placement uses tap+drag on the board plus a
 // Rotate and Next button. Firing uses tap+drag on the enemy board,
@@ -74,6 +94,7 @@ import { Panel }     from "../composites/Panel.js";
 import { Button }    from "../composites/Button.js";
 import { Label }     from "../composites/Label.js";
 import { Keyboard }  from "../composites/Keyboard.js";
+import { Composite } from "../composites/Composite.js";
 import { Viewport }  from "../systems/Viewport.js";
 
 // Repo config.
@@ -237,6 +258,10 @@ export class Battleship extends App {
     // Mobile controls visibility (fire phase only).
     this.controlsVisible = false;
 
+    // Board layout flip. Convenience only. False is the default
+    // layout (Your left/top, Enemy right/bottom). True swaps them.
+    this.flipped = false;
+
     // Cycle scheduler.
     this._cycleTimer  = null;
     this._cycleDelay  = CYCLE_MS;
@@ -258,6 +283,12 @@ export class Battleship extends App {
     this.inputText       = "";
 
     this._joining = false;
+
+    // Slot chosen by the presence-claim write callback during join.
+    // Set as a side effect and read back after the write lands, so
+    // this.slot reflects what the file actually granted, not what a
+    // pre-write read guessed.
+    this._claimedSlot = -1;
 
     this._opChain = Promise.resolve();
 
@@ -651,39 +682,54 @@ export class Battleship extends App {
     return screen;
   }
 
+  // Build the two frame composites, the two content layers, the
+  // Flip button, and (mobile) the D-pad. The frames are positioned
+  // by _layoutBoards so flip is a reposition of existing nodes.
   _buildBoardsDesktop(screen) {
     const W = Viewport.width;
 
     const cell    = 36;
     const boardPx = cell * BOARD_W;
     const gap     = 80;
-    const totalW  = boardPx * 2 + gap;
-    const bx      = (W - totalW) / 2;
-    const by      = 150;
 
     this._cell     = cell;
-    this._myBx     = bx;
-    this._myBy     = by;
-    this._opBx     = bx + boardPx + gap;
-    this._opBy     = by;
     this._boardPx  = boardPx;
+    this._layoutGap = gap;
 
-    this._drawBoardFrame(screen, this._myBx, this._myBy, boardPx, cell, "YOUR WATERS",  "#80a0c0");
-    this._drawBoardFrame(screen, this._opBx, this._opBy, boardPx, cell, "ENEMY WATERS", "#c08080");
+    // Frame composites. Contents are added by _drawBoardFrame.
+    this.myFrame = new Composite({ x: 0, y: 0, w: boardPx, h: boardPx });
+    this.opFrame = new Composite({ x: 0, y: 0, w: boardPx, h: boardPx });
+    screen.add(this.myFrame);
+    screen.add(this.opFrame);
 
+    this._drawBoardFrame(this.myFrame, boardPx, cell, "YOUR WATERS",  "#80a0c0");
+    this._drawBoardFrame(this.opFrame, boardPx, cell, "ENEMY WATERS", "#c08080");
+
+    // Content layers.
     this.myLayer = new Panel({
-      x: this._myBx, y: this._myBy,
-      w: boardPx, h: boardPx,
+      x: 0, y: 0, w: boardPx, h: boardPx,
+      fill: null, stroke: null,
+    });
+    this.opLayer = new Panel({
+      x: 0, y: 0, w: boardPx, h: boardPx,
       fill: null, stroke: null,
     });
     screen.add(this.myLayer);
-
-    this.opLayer = new Panel({
-      x: this._opBx, y: this._opBy,
-      w: boardPx, h: boardPx,
-      fill: null, stroke: null,
-    });
     screen.add(this.opLayer);
+
+    // Flip button. Small. Sits in the existing gap, vertically
+    // centered on the boards. No board repositioning.
+    this.flipBtn = new Button({
+      x: 0, y: 0, w: 64, h: 36,
+      text: "Flip",
+      fill: BTN_DARK_FILL,
+      stroke: BTN_DARK_STROKE,
+      strokeWidth: 1,
+      radius: 6,
+      textOptions: { font: "bold 14px sans-serif", color: "#d8e4f7" },
+      onClick: () => this._applyFlip(),
+    });
+    screen.add(this.flipBtn);
 
     screen.add(new Text({
       x: W / 2, y: Viewport.height - 40,
@@ -694,7 +740,12 @@ export class Battleship extends App {
       baseline: "middle",
     }));
 
-    this._buildActionRow(screen, Viewport.height - 96);
+    // Desktop action row is raised 20px from its old position so it
+    // does not crowd the controls-hint text near the bottom.
+    this._buildActionRow(screen, Viewport.height - 116);
+
+    // Place the boards and Flip button for the initial flip state.
+    this._layoutBoards();
   }
 
   _buildBoardsMobile(screen) {
@@ -702,43 +753,52 @@ export class Battleship extends App {
 
     const cell    = 46;
     const boardPx = cell * BOARD_W;
-    const bx      = (W - boardPx) / 2;
+    const gap     = 60;
 
-    const myBy = 150;
-    const opBy = myBy + boardPx + 60;
+    this._cell      = cell;
+    this._boardPx   = boardPx;
+    this._layoutGap = gap;
 
-    this._cell     = cell;
-    this._myBx     = bx;
-    this._myBy     = myBy;
-    this._opBx     = bx;
-    this._opBy     = opBy;
-    this._boardPx  = boardPx;
+    this.myFrame = new Composite({ x: 0, y: 0, w: boardPx, h: boardPx });
+    this.opFrame = new Composite({ x: 0, y: 0, w: boardPx, h: boardPx });
+    screen.add(this.myFrame);
+    screen.add(this.opFrame);
 
-    this._drawBoardFrame(screen, this._myBx, this._myBy, boardPx, cell, "YOUR WATERS",  "#80a0c0");
-    this._drawBoardFrame(screen, this._opBx, this._opBy, boardPx, cell, "ENEMY WATERS", "#c08080");
+    this._drawBoardFrame(this.myFrame, boardPx, cell, "YOUR WATERS",  "#80a0c0");
+    this._drawBoardFrame(this.opFrame, boardPx, cell, "ENEMY WATERS", "#c08080");
 
     this.myLayer = new Panel({
-      x: this._myBx, y: this._myBy,
-      w: boardPx, h: boardPx,
+      x: 0, y: 0, w: boardPx, h: boardPx,
+      fill: null, stroke: null,
+    });
+    this.opLayer = new Panel({
+      x: 0, y: 0, w: boardPx, h: boardPx,
       fill: null, stroke: null,
     });
     screen.add(this.myLayer);
-
-    this.opLayer = new Panel({
-      x: this._opBx, y: this._opBy,
-      w: boardPx, h: boardPx,
-      fill: null, stroke: null,
-    });
     screen.add(this.opLayer);
 
-    // Action row below the enemy board.
-    const actionY = this._opBy + boardPx + 20;
-    this._buildActionRow(screen, actionY);
+    // Flip button, centered in the existing gap.
+    this.flipBtn = new Button({
+      x: 0, y: 0, w: 120, h: 40,
+      text: "Flip",
+      fill: BTN_DARK_FILL,
+      stroke: BTN_DARK_STROKE,
+      strokeWidth: 2,
+      radius: 6,
+      textOptions: { font: "bold 18px sans-serif", color: "#d8e4f7" },
+      onClick: () => this._applyFlip(),
+    });
+    screen.add(this.flipBtn);
 
-    // Show Controls toggle: below the action row.
-    const showCtrlY = actionY + 64;
+    // Action row below the lower board. Positioned by _layoutBoards.
+    this.actionRowY = 0;
+    this._buildActionRow(screen, 0);
+
+    // Show Controls toggle: below the action row. Positioned by
+    // _layoutBoards.
     this.controlsToggle = new Button({
-      x: W / 2 - 160, y: showCtrlY, w: 320, h: 52,
+      x: W / 2 - 160, y: 0, w: 320, h: 52,
       text: "Show Controls",
       fill: BTN_DARK_FILL,
       stroke: BTN_DARK_STROKE,
@@ -750,36 +810,20 @@ export class Battleship extends App {
     this.controlsToggle.visible = false;
     screen.add(this.controlsToggle);
 
-    // D-pad. Placed so it overlays YOUR WATERS. Buttons are added
-    // to the screen after the boards, so they draw on top. During
-    // the fire phase taps on your own board are inert anyway, so no
-    // conflict. Buttons start hidden.
-    const dpadCx  = W / 2;
-    const btnSize = 84;
-    const gap     = 10;
-    // Center the D-pad vertically inside the player's board.
-    const centerY = this._myBy + boardPx / 2;
-
+    // D-pad. Buttons start hidden. Positioned by _layoutDpad so
+    // they follow Your Waters when the boards are flipped.
     this.dpadButtons = [];
 
     const defs = [
-      { text: "^", dir: "up",
-        x: dpadCx - btnSize / 2,
-        y: centerY - btnSize - gap / 2 },
-      { text: "v", dir: "down",
-        x: dpadCx - btnSize / 2,
-        y: centerY + gap / 2 },
-      { text: "<", dir: "left",
-        x: dpadCx - btnSize - gap / 2 - btnSize / 2,
-        y: centerY - btnSize / 2 },
-      { text: ">", dir: "right",
-        x: dpadCx + gap / 2 + btnSize / 2,
-        y: centerY - btnSize / 2 },
+      { text: "^", dir: "up"    },
+      { text: "v", dir: "down"  },
+      { text: "<", dir: "left"  },
+      { text: ">", dir: "right" },
     ];
 
     for (const d of defs) {
       const b = new Button({
-        x: d.x, y: d.y, w: btnSize, h: btnSize,
+        x: 0, y: 0, w: 84, h: 84,
         text: d.text,
         fill: BTN_DARK_FILL,
         stroke: BTN_DARK_STROKE,
@@ -789,14 +833,177 @@ export class Battleship extends App {
         onClick: () => this._nudgeFireCursor(d.dir),
       });
       b.visible = false;
+      this._dpadDir = this._dpadDir || {};
+      b._dir = d.dir;
       screen.add(b);
       this.dpadButtons.push(b);
     }
+
+    this._layoutBoards();
   }
 
-  _drawBoardFrame(screen, bx, by, boardPx, cell, label, labelColor) {
-    screen.add(new Text({
-      x: bx, y: by - 28,
+  // Position the frame composites, content layers, Flip button, and
+  // (mobile) the action row, controls toggle, and D-pad from the
+  // current this.flipped state. Called at build and again on flip.
+  // This is the only place board anchors are computed.
+  _layoutBoards() {
+    const boardPx = this._boardPx;
+    const gap     = this._layoutGap;
+    const mobile  = this.mobile;
+
+    if (mobile) {
+      const W  = Viewport.width;
+      const bx = (W - boardPx) / 2;
+
+      const topBy = 150;
+      const botBy = topBy + boardPx + gap;
+
+      if (!this.flipped) {
+        this._myBy = topBy;
+        this._opBy = botBy;
+      } else {
+        this._opBy = topBy;
+        this._myBy = botBy;
+      }
+      this._myBx = bx;
+      this._opBx = bx;
+
+      // Frame composites. Frame label sits above the board, so the
+      // frame composite origin is the board's top-left; the label
+      // inside it is drawn at negative y in local space.
+      this.myFrame.x = this._myBx;
+      this.myFrame.y = this._myBy;
+      this.opFrame.x = this._opBx;
+      this.opFrame.y = this._opBy;
+
+      // Content layers.
+      this.myLayer.x = this._myBx;
+      this.myLayer.y = this._myBy;
+      this.opLayer.x = this._opBx;
+      this.opLayer.y = this._opBy;
+
+      // Flip button: centered in the gap between the boards. The
+      // lower board starts at max(myBy, opBy); the upper board ends
+      // at min(myBy, opBy) + boardPx. The gap between them holds the
+      // button.
+      const upperBottom = Math.min(this._myBy, this._opBy) + boardPx;
+      const gapCenter   = upperBottom + gap / 2;
+      this.flipBtn.x = W / 2 - this.flipBtn.w / 2;
+      this.flipBtn.y = gapCenter - this.flipBtn.h / 2;
+
+      // Action row below whichever board is on the bottom.
+      const lowerBottom = Math.max(this._myBy, this._opBy) + boardPx;
+      const actionY = lowerBottom + 20;
+      this.actionRowY = actionY;
+      this._positionActionRow(actionY);
+      this.controlsToggle.y = actionY + 64;
+
+      this._layoutDpad();
+    } else {
+      const W = Viewport.width;
+
+      const cell    = this._cell;
+      const totalW  = boardPx * 2 + gap;
+      const bx      = (W - totalW) / 2;
+      const by      = 150;
+
+      if (!this.flipped) {
+        this._myBx = bx;
+        this._opBx = bx + boardPx + gap;
+      } else {
+        this._opBx = bx;
+        this._myBx = bx + boardPx + gap;
+      }
+      this._myBy = by;
+      this._opBy = by;
+
+      this.myFrame.x = this._myBx;
+      this.myFrame.y = this._myBy;
+      this.opFrame.x = this._opBx;
+      this.opFrame.y = this._opBy;
+
+      this.myLayer.x = this._myBx;
+      this.myLayer.y = this._myBy;
+      this.opLayer.x = this._opBx;
+      this.opLayer.y = this._opBy;
+
+      // Flip button: centered in the horizontal gap, vertically
+      // centered on the boards.
+      const leftBoardRight = Math.min(this._myBx, this._opBx) + boardPx;
+      const gapCenterX     = leftBoardRight + gap / 2;
+      this.flipBtn.x = gapCenterX - this.flipBtn.w / 2;
+      this.flipBtn.y = by + boardPx / 2 - this.flipBtn.h / 2;
+
+      void cell;
+    }
+  }
+
+  // Position the mobile D-pad over Your Waters, centered on
+  // whatever board that currently occupies.
+  _layoutDpad() {
+    if (!this.mobile) return;
+    if (!this.dpadButtons || this.dpadButtons.length === 0) return;
+
+    const boardPx = this._boardPx;
+    const W       = Viewport.width;
+
+    const dpadCx  = W / 2;
+    const btnSize = 84;
+    const gap     = 10;
+    const centerY = this._myBy + boardPx / 2;
+
+    const positions = {
+      up:    { x: dpadCx - btnSize / 2, y: centerY - btnSize - gap / 2 },
+      down:  { x: dpadCx - btnSize / 2, y: centerY + gap / 2 },
+      left:  { x: dpadCx - btnSize - gap / 2 - btnSize / 2, y: centerY - btnSize / 2 },
+      right: { x: dpadCx + gap / 2 + btnSize / 2, y: centerY - btnSize / 2 },
+    };
+
+    for (const b of this.dpadButtons) {
+      const p = positions[b._dir];
+      if (!p) continue;
+      b.x = p.x;
+      b.y = p.y;
+      b.w = btnSize;
+      b.h = btnSize;
+    }
+  }
+
+  // Reposition the mobile action row buttons when the lower board
+  // moves. Each button was placed at construction with a specific
+  // x; only its y needs to move with the row.
+  _positionActionRow(actionY) {
+    if (!this.mobile) return;
+
+    const row = [
+      this.voteMeBtn,
+      this.voteDeferBtn,
+      this.readyBtn,
+      this.placeBtn,
+      this.lockBtn,
+      this.rotateBtn,
+      this.nextBtn,
+      this.resetBtn,
+      this.fireBtn,
+    ];
+    for (const b of row) {
+      if (b) b.y = actionY;
+    }
+
+    if (this.outcomeLabel) {
+      this.outcomeLabel.y = actionY - 30;
+    }
+    if (this.voteLabel) {
+      this.voteLabel.y = actionY - 30;
+    }
+  }
+
+  // Build one board's frame contents into a composite. The
+  // composite origin is the board's top-left. Label is drawn above
+  // at negative y in local space.
+  _drawBoardFrame(composite, boardPx, cell, label, labelColor) {
+    composite.add(new Text({
+      x: 0, y: -28,
       text: label,
       font: "bold 14px monospace",
       color: labelColor,
@@ -804,8 +1011,8 @@ export class Battleship extends App {
       baseline: "middle",
     }));
 
-    screen.add(new Panel({
-      x: bx - 2, y: by - 2,
+    composite.add(new Panel({
+      x: -2, y: -2,
       w: boardPx + 4, h: boardPx + 4,
       fill: "#0a0e12",
       stroke: "#2a3238",
@@ -813,14 +1020,14 @@ export class Battleship extends App {
     }));
 
     for (let i = 0; i <= BOARD_W; i++) {
-      screen.add(new Line({
-        x1: bx + i * cell, y1: by,
-        x2: bx + i * cell, y2: by + boardPx,
+      composite.add(new Line({
+        x1: i * cell, y1: 0,
+        x2: i * cell, y2: boardPx,
         stroke: "#1e262c", strokeWidth: 1,
       }));
-      screen.add(new Line({
-        x1: bx, y1: by + i * cell,
-        x2: bx + boardPx, y2: by + i * cell,
+      composite.add(new Line({
+        x1: 0, y1: i * cell,
+        x2: boardPx, y2: i * cell,
         stroke: "#1e262c", strokeWidth: 1,
       }));
     }
@@ -831,6 +1038,20 @@ export class Battleship extends App {
   _buildActionRow(screen, actionY) {
     const W = Viewport.width;
     const mobile = this.mobile;
+
+    // Vote-phase label. Shown only while the handshake is active.
+    // Positioned above the action row, same slot as outcomeLabel.
+    this.voteLabel = new Text({
+      x: W / 2,
+      y: actionY - 30,
+      text: "Choose who goes first",
+      font: mobile ? "bold 20px sans-serif" : "bold 16px sans-serif",
+      color: "#a0c0ff",
+      align: "center",
+      baseline: "middle",
+    });
+    this.voteLabel.visible = false;
+    screen.add(this.voteLabel);
 
     if (mobile) {
       this.voteMeBtn = new Button({
@@ -1055,21 +1276,59 @@ export class Battleship extends App {
       screen.add(this.fireBtn);
 
       this.nextBtn = null;
-      this.controlsToggle = null;
-      this.dpadButtons = [];
     }
 
     this.outcomeLabel = new Text({
       x: W / 2,
       y: actionY - 30,
       text: "",
-      font: "bold 16px sans-serif",
+      font: mobile ? "bold 16px sans-serif" : "bold 16px sans-serif",
       color: "#a0c0ff",
       align: "center",
       baseline: "middle",
     });
     this.outcomeLabel.visible = false;
     screen.add(this.outcomeLabel);
+  }
+
+  // Reposition the mobile action-row buttons to a new y. Called by
+  // _layoutBoards when the lower board moves. Buttons keep their
+  // construction-time x.
+  _positionActionRow(actionY) {
+    if (!this.mobile) return;
+
+    const row = [
+      this.voteMeBtn,
+      this.voteDeferBtn,
+      this.readyBtn,
+      this.placeBtn,
+      this.lockBtn,
+      this.rotateBtn,
+      this.nextBtn,
+      this.resetBtn,
+      this.fireBtn,
+    ];
+    for (const b of row) {
+      if (b) b.y = actionY;
+    }
+
+    if (this.outcomeLabel) {
+      this.outcomeLabel.y = actionY - 30;
+    }
+    if (this.voteLabel) {
+      this.voteLabel.y = actionY - 30;
+    }
+  }
+
+  // Toggle the board layout. Convenience only. Swaps the four
+  // anchor constants, repositions the frame composites, content
+  // layers, Flip button, action row, controls toggle, and D-pad.
+  // Game logic is untouched.
+  _applyFlip() {
+    this.flipped = !this.flipped;
+
+    this._layoutBoards();
+    this._renderAll();
   }
 
   _buildChatPanel(screen) {
@@ -1729,6 +1988,18 @@ export class Battleship extends App {
     return n;
   }
 
+  // Find the first slot in `entries` that is not currently present.
+  // Returns -1 if all slots are present. Used inside the presence-
+  // claim build callback so the slot is decided against the freshest
+  // content, not a pre-read.
+  _firstFreeSlot(entries) {
+    for (let i = 0; i < SLOTS; i++) {
+      const e = entries[i];
+      if (!e || !isPresent(e.iso)) return i;
+    }
+    return -1;
+  }
+
   // ---------- Room join ----------
 
   async _joinRoom(room) {
@@ -1828,21 +2099,18 @@ export class Battleship extends App {
         }
       }
 
-      let slot = -1;
-      for (let i = 0; i < SLOTS; i++) {
-        const e = pres.entries[i];
-        if (!e || !isPresent(e.iso)) { slot = i; break; }
-      }
-
-      if (slot < 0) {
-        this._setStatus("Room is full.");
-        return;
-      }
-
       const path   = DATA_ROOT + room + "/presence.txt";
       const myIso  = nowIso();
       const myName = this.username;
       const self   = this;
+
+      // Slot is chosen INSIDE the callback, against whatever content
+      // _writeWithRetry hands us. On the first attempt that content
+      // is the pre-read we already have. On any retry (because
+      // another joiner committed first) it is the freshly re-read
+      // content, which now includes the other joiner's line. The
+      // callback reports the slot it took via self._claimedSlot.
+      this._claimedSlot = -1;
 
       const hint = {
         commitSha: ctx.commitSha,
@@ -1857,8 +2125,12 @@ export class Battleship extends App {
           this._writeWithRetry(
             path,
             (currentContent) => {
-              const newLine = "slot" + slot + "|" + myName + "|" + myIso;
-              return self._splicePresenceLine(currentContent, slot, newLine);
+              const entries = self._parsePresence(currentContent);
+              const chosen = self._firstFreeSlot(entries);
+              if (chosen < 0) return null;
+              self._claimedSlot = chosen;
+              const newLine = "slot" + chosen + "|" + myName + "|" + myIso;
+              return self._splicePresenceLine(currentContent, chosen, newLine);
             },
             "join " + room,
             hint
@@ -1874,8 +2146,15 @@ export class Battleship extends App {
         return;
       }
 
+      if (this._claimedSlot < 0) {
+        // Should not happen: ok:true implies a slot was chosen. Guard
+        // anyway so a silent failure cannot leave this.slot unset.
+        this._setStatus("Room is full.");
+        return;
+      }
+
       this.room        = room;
-      this.slot        = slot;
+      this.slot        = this._claimedSlot;
       this.presenceEntries = pres.entries;
       this.game        = null;
       this.chatLines   = [];
@@ -1897,9 +2176,12 @@ export class Battleship extends App {
       this.myReady = false;
       this.chatOpen = false;
       this.controlsVisible = false;
+      this.flipped = false;
       if (this.chatPanel) this.chatPanel.visible = false;
       if (this.chatKeyboard) this.chatKeyboard.visible = false;
       this.unread = 0;
+
+      this._layoutBoards();
 
       this._pushScreen("game");
       this._clearStatus();
@@ -2491,9 +2773,17 @@ export class Battleship extends App {
     this.placeIdx  = 0;
     this.placeRot  = false;
     this.myFleet   = null;
-    this._placePreview = null;
     this.hoverCell = { x: 0, y: 0 };
     this.lockedShot = null;
+
+    // Mobile: show the current ship at 0,0 immediately. Desktop
+    // already shows it via hoverCell defaulting to 0,0.
+    if (this.mobile) {
+      this._placePreview = { x: 0, y: 0, horiz: !this.placeRot };
+    } else {
+      this._placePreview = null;
+    }
+
     this._renderAll();
   }
 
@@ -2503,6 +2793,11 @@ export class Battleship extends App {
 
     if (this._placePreview) {
       this._placePreview.horiz = !this.placeRot;
+    } else if (this.mobile) {
+      // No preview yet (should not happen after _beginPlacement, but
+      // guard anyway) - create one so rotation has something to act
+      // on.
+      this._placePreview = { x: 0, y: 0, horiz: !this.placeRot };
     }
     this._renderAll();
   }
@@ -2512,7 +2807,14 @@ export class Battleship extends App {
     this.placeIdx = 0;
     this.placeRot = false;
     this.myFleet  = null;
-    this._placePreview = null;
+
+    // Mobile: reset also re-shows the first ship at 0,0.
+    if (this.mobile) {
+      this._placePreview = { x: 0, y: 0, horiz: !this.placeRot };
+    } else {
+      this._placePreview = null;
+    }
+
     this._renderAll();
   }
 
@@ -2530,7 +2832,13 @@ export class Battleship extends App {
     if (!this.myFleet) this.myFleet = [];
     this.myFleet.push({ name: ship.name, len: ship.len, cells });
     this.placeIdx++;
-    this._placePreview = null;
+
+    // Mobile: the NEXT ship appears at 0,0 immediately.
+    if (this.mobile && this.placeIdx < FLEET.length) {
+      this._placePreview = { x: 0, y: 0, horiz: !this.placeRot };
+    } else {
+      this._placePreview = null;
+    }
 
     this._renderAll();
   }
@@ -2626,7 +2934,7 @@ export class Battleship extends App {
         );
       });
 
-      await this._refreshGameMirror();
+      await self._refreshGameMirror();
 
       this.placing = false;
       this._placePreview = null;
@@ -3159,6 +3467,10 @@ export class Battleship extends App {
     this.voteMeBtn.visible    = !!votePhase;
     this.voteDeferBtn.visible = !!votePhase;
     this.readyBtn.visible     = !!votePhase;
+
+    if (this.voteLabel) {
+      this.voteLabel.visible = !!votePhase;
+    }
 
     if (votePhase) {
       if (this.myReady) {
