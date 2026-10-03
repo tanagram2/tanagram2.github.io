@@ -75,17 +75,34 @@
 // splice and is what keeps two concurrent writers from stomping
 // each other's lines.
 //
-// Slot claiming is the same shape. The slot a joiner takes is
-// decided INSIDE the presence-claim build callback, against the
-// freshest presence content _writeWithRetry has, not against a
-// pre-read taken before the write. Two clients racing to join an
-// empty room both read 0/2, both run the dead-room reset, then both
-// claim. Whichever commits first takes slot 0. The loser's hint
-// misses (or its PATCH conflicts), _writeWithRetry re-reads, and
-// the callback sees slot 0 now occupied and takes slot 1. No
-// explicit race flag, no lock, no claimed-slot register: the shared
-// presence file resolves the race. If the room fills under the
-// callback, it returns null and the join surfaces "Room is full".
+// Slot claiming: the slot a joiner takes is decided INSIDE the
+// presence-claim build callback, against the freshest presence
+// content _writeWithRetry has, not against a pre-read taken before
+// the write. Two clients racing to join an empty room both read
+// 0/2, then both claim. Whichever commits first takes slot 0. The
+// loser's hint misses (or its PATCH conflicts), _writeWithRetry
+// re-reads, and the callback sees slot 0 now occupied and takes
+// slot 1. The callback reports its chosen slot back out via
+// self._claimedSlot. If the room fills under the callback, it
+// returns null and _writeWithRetry returns { ok: false }; the join
+// surfaces "Room is full".
+//
+// Dead-room reset: a room is dead when presence.txt has zero
+// present lines. Only then does the reset path run. On the dead
+// path, the joiner claims a presence slot FIRST, then resets
+// game.txt and chat.txt. It NEVER resets presence.txt on this path.
+// The old presence reset was the destructive step: it could wipe a
+// line another joiner had just written, leaving two clients who
+// each saw a room with only themselves in it. Claim-first makes the
+// claimer present before any reset runs, so a second joiner
+// arriving one moment later sees a live room and takes the other
+// slot. The game.txt and chat.txt resets are idempotent no-ops on
+// already-empty files, so a race on those is harmless.
+//
+// The reset path runs ONLY when presence reads as zero present. If
+// even one slot is live (for example a lone player waiting for an
+// opponent), a new joiner reads the room as alive, claims the free
+// slot, and never touches the reset path.
 //
 // Sunk ships: a ship is sunk when every one of its cells has been
 // hit. A sunk ship's cells are drawn in a darker shade of the shot
@@ -102,8 +119,8 @@
 //
 // The content layers (myLayer, opLayer) are bare Composites, not
 // Panels. They exist only to hold the fleet / shot Rects and be
-// positioned. A Panel would paint its default self shape over the
-// ocean; a bare Composite paints nothing.
+// positioned. A Panel with default or null fill paints its default
+// grey self shape over the ocean; a bare Composite paints nothing.
 //
 // Button color convention: blue is the default button look (Flip,
 // Rotate, Reset, Show Controls, Hide, Return, Update, Chat, room
@@ -111,6 +128,18 @@
 // (Lock In, Fire!, Ready, Next, Rematch, Leave, Exit). The D-pad
 // arrow buttons are the only place BTN_DARK_* is still used, since
 // they sit over the blue ocean and grey reads better against it.
+//
+// Two Update buttons exist, on different screens, with different
+// behavior:
+//   - Game screen Update (this.updateBtn) runs a full game cycle
+//     (_manualUpdate -> _cycle). Throttled at UPDATE_THROTTLE.
+//   - Room list Update (this.roomListUpdateBtn) runs only a room
+//     occupancy read (_manualUpdateRoomList -> _refreshRoomOccupancy).
+//     No throttle. It is a read-only operation.
+// They share a visual style and a screen position on their
+// respective screens, but they are separate objects, wired to
+// separate handlers, with separate countdown labels and separate
+// timers.
 //
 // Shared-file trust model: both players read and write the same
 // game.txt. There is no attempt to hide fleet positions from the
@@ -155,6 +184,10 @@ const DEAD_CONFIRM_MS   = 1000;
 const STAGGER_MIN_MS    = 500;
 const STAGGER_MAX_MS    = 3000;
 const PRESTAGGER_MAX_MS = 2000;
+
+// Room list screen auto-refresh. Independent of CYCLE_MS so it can
+// be tuned on its own.
+const ROOMLIST_REFRESH_MS = 30000;
 
 const LEAVE_TIMESTAMP = "1970-01-01T00:00:00.000Z";
 
@@ -345,10 +378,15 @@ export class Battleship extends App {
     // layout (Your left/top, Enemy right/bottom). True swaps them.
     this.flipped = false;
 
-    // Cycle scheduler.
+    // Game-screen cycle scheduler.
     this._cycleTimer  = null;
     this._cycleDelay  = CYCLE_MS;
     this._nextCycleAt = 0;
+
+    // Room-list-screen auto-refresh scheduler. Independent of the
+    // game cycle. Runs only while the room list is visible.
+    this._roomListTimer  = null;
+    this._roomListNextAt = 0;
 
     this._lastUpdate = 0;
     this._lastSend   = 0;
@@ -359,6 +397,7 @@ export class Battleship extends App {
     this._votingWrite  = false;
     this._rematchWrite = false;
     this._firing       = false;
+    this._roomListUpdating = false;
 
     this._cursorOn    = true;
     this._cursorTimer = 0;
@@ -390,6 +429,7 @@ export class Battleship extends App {
     this._refreshUsernameField();
     this._refreshChatInput();
     this._refreshCountdown();
+    this._refreshRoomListCountdown();
   }
 
   // ---------- Session ----------
@@ -446,6 +486,19 @@ export class Battleship extends App {
     const remainMs  = this._nextCycleAt - Date.now();
     const remainSec = remainMs > 0 ? Math.ceil(remainMs / 1000) : 0;
     this.cycleCountdownLabel.text = "auto: " + remainSec + "s";
+  }
+
+  _refreshRoomListCountdown() {
+    if (!this.roomListCountdownLabel) return;
+
+    if (!this._roomListNextAt) {
+      this.roomListCountdownLabel.text = "";
+      return;
+    }
+
+    const remainMs  = this._roomListNextAt - Date.now();
+    const remainSec = remainMs > 0 ? Math.ceil(remainMs / 1000) : 0;
+    this.roomListCountdownLabel.text = "auto: " + remainSec + "s";
   }
 
   // ---------- Screens ----------
@@ -587,6 +640,33 @@ export class Battleship extends App {
       textOptions: { font: "bold 18px sans-serif", color: "#ffffff" },
       onClick: () => this._goBack(),
     }));
+
+    // Room-list Update button. Distinct object from the game
+    // screen's Update button. Wired to a handler that runs only a
+    // room occupancy read, not a full game cycle. Same visual style
+    // and screen position as the game screen's Update button.
+    this.roomListUpdateBtn = new Button({
+      x: W - 164, y: 24, w: 140, h: 48,
+      text: "Update",
+      fill: BTN_BLUE_FILL,
+      stroke: BTN_BLUE_STROKE,
+      strokeWidth: 2,
+      radius: 8,
+      textOptions: { font: "bold 18px sans-serif", color: "#ffffff" },
+      onClick: () => this._manualUpdateRoomList(),
+    });
+    screen.add(this.roomListUpdateBtn);
+
+    this.roomListCountdownLabel = new Text({
+      x: W - 164 + 70,
+      y: 24 + 48 + 16,
+      text: "",
+      font: "14px monospace",
+      color: TEXT_DIM,
+      align: "center",
+      baseline: "middle",
+    });
+    screen.add(this.roomListCountdownLabel);
 
     const cx = W / 2;
 
@@ -1816,9 +1896,16 @@ export class Battleship extends App {
       this._stopCycle();
     }
 
+    if (name === "room") {
+      this._startRoomListRefresh();
+    } else {
+      this._stopRoomListRefresh();
+    }
+
     this._refreshUsernameField();
     this._refreshChatInput();
     this._refreshCountdown();
+    this._refreshRoomListCountdown();
 
     if (name !== "room" && this.roomStatusLabel) {
       this.roomStatusLabel.text = "";
@@ -1863,6 +1950,84 @@ export class Battleship extends App {
 
   _clearStatus() {
     this._setStatus("");
+  }
+
+  // ---------- Room-list auto-refresh ----------
+
+  _startRoomListRefresh() {
+    this._stopRoomListRefresh();
+    this._roomListNextAt = Date.now() + ROOMLIST_REFRESH_MS;
+    this._refreshRoomListCountdown();
+    this._roomListTimer = setTimeout(() => this._runRoomListRefreshLoop(), ROOMLIST_REFRESH_MS);
+  }
+
+  _stopRoomListRefresh() {
+    if (this._roomListTimer) {
+      clearTimeout(this._roomListTimer);
+      this._roomListTimer = null;
+    }
+    this._roomListNextAt = 0;
+    this._refreshRoomListCountdown();
+  }
+
+  async _runRoomListRefreshLoop() {
+    // If the room list is no longer visible, stop silently.
+    if (this.stack[this.stack.length - 1] !== "room") {
+      this._stopRoomListRefresh();
+      return;
+    }
+
+    this._roomListNextAt = 0;
+    this._refreshRoomListCountdown();
+
+    try {
+      await this._refreshRoomOccupancy();
+    } catch (e) {
+      // _refreshRoomOccupancy handles its own error status.
+    }
+
+    if (this.stack[this.stack.length - 1] !== "room") {
+      this._stopRoomListRefresh();
+      return;
+    }
+
+    this._roomListNextAt = Date.now() + ROOMLIST_REFRESH_MS;
+    this._refreshRoomListCountdown();
+    this._roomListTimer = setTimeout(() => this._runRoomListRefreshLoop(), ROOMLIST_REFRESH_MS);
+  }
+
+  async _manualUpdateRoomList() {
+    if (this._roomListUpdating) return;
+    if (this.stack[this.stack.length - 1] !== "room") return;
+
+    this._roomListUpdating = true;
+    this._busyStart(this.roomListUpdateBtn);
+
+    // Reset the countdown to a fresh interval now.
+    if (this._roomListTimer) {
+      clearTimeout(this._roomListTimer);
+      this._roomListTimer = null;
+    }
+    this._roomListNextAt = 0;
+    this._refreshRoomListCountdown();
+
+    try {
+      await this._refreshRoomOccupancy();
+    } catch (e) {
+      // _refreshRoomOccupancy handles its own error status.
+    }
+
+    this._busyEnd(this.roomListUpdateBtn);
+    this._roomListUpdating = false;
+
+    if (this.stack[this.stack.length - 1] !== "room") {
+      this._stopRoomListRefresh();
+      return;
+    }
+
+    this._roomListNextAt = Date.now() + ROOMLIST_REFRESH_MS;
+    this._refreshRoomListCountdown();
+    this._roomListTimer = setTimeout(() => this._runRoomListRefreshLoop(), ROOMLIST_REFRESH_MS);
   }
 
   // ---------- Room occupancy ----------
@@ -2275,6 +2440,9 @@ export class Battleship extends App {
 
       let anyPresent = pres.entries.some(e => e && isPresent(e.iso));
 
+      // If the room looked dead, confirm after a short pause. This
+      // is to avoid resetting a room whose presence file just
+      // happens to be mid-write.
       if (!anyPresent) {
         await this._sleep(DEAD_CONFIRM_MS);
         try {
@@ -2292,73 +2460,27 @@ export class Battleship extends App {
         anyPresent = pres.entries.some(e => e && isPresent(e.iso));
       }
 
-      if (!anyPresent) {
+      const roomIsDead = !anyPresent;
+
+      if (roomIsDead) {
         this._setStatus("Resetting dead room...");
-
-        try {
-          await this._writeWithRetry(
-            DATA_ROOT + room + "/game.txt",
-            (cur) => (cur === "" ? null : ""),
-            "reset " + room + " game"
-          );
-        } catch (e) {
-          if (e.message === "BAD_SESSION") {
-            this._handleApiError(e, "reset game");
-            return;
-          }
-        }
-
-        try {
-          await this._writeWithRetry(
-            DATA_ROOT + room + "/chat.txt",
-            (cur) => (cur === "" ? null : ""),
-            "reset " + room + " chat"
-          );
-        } catch (e) {
-          if (e.message === "BAD_SESSION") {
-            this._handleApiError(e, "reset chat");
-            return;
-          }
-        }
-
-        try {
-          await this._writeWithRetry(
-            DATA_ROOT + room + "/presence.txt",
-            (cur) => (cur === "" ? null : this._serializePresence(new Array(SLOTS).fill(null))),
-            "reset " + room + " presence"
-          );
-        } catch (e) {
-          if (e.message === "BAD_SESSION") {
-            this._handleApiError(e, "reset presence");
-            return;
-          }
-        }
-
-        try {
-          const r = await this._serialize(async () => {
-            const c = await this._fetchTreeContext();
-            const p = await this._readPresenceFromEntries(c.entries, room);
-            return { ctx: c, pres: p };
-          });
-          ctx  = r.ctx;
-          pres = r.pres;
-        } catch (e) {
-          this._handleApiError(e, "read presence after reset");
-          return;
-        }
       }
 
+      // Claim a slot via the presence-claim callback. The slot is
+      // chosen against the freshest content _writeWithRetry has, so
+      // on a retry it re-reads and takes whatever slot is free. The
+      // callback reports its chosen slot via self._claimedSlot.
+      //
+      // On the dead path, this claim makes us present BEFORE any
+      // reset runs. A second joiner arriving one moment later sees
+      // a live room (our line) and takes the other slot. The reset
+      // below then only touches game.txt and chat.txt, which are
+      // idempotent no-ops on already-empty files.
       const path   = DATA_ROOT + room + "/presence.txt";
       const myIso  = nowIso();
       const myName = this.username;
       const self   = this;
 
-      // Slot is chosen INSIDE the callback, against whatever content
-      // _writeWithRetry hands us. On the first attempt that content
-      // is the pre-read we already have. On any retry (because
-      // another joiner committed first) it is the freshly re-read
-      // content, which now includes the other joiner's line. The
-      // callback reports the slot it took via self._claimedSlot.
       this._claimedSlot = -1;
 
       const hint = {
@@ -2396,10 +2518,63 @@ export class Battleship extends App {
       }
 
       if (this._claimedSlot < 0) {
-        // Should not happen: ok:true implies a slot was chosen. Guard
-        // anyway so a silent failure cannot leave this.slot unset.
+        // Should not happen: ok:true implies a slot was chosen.
+        // Guard anyway so a silent failure cannot leave this.slot
+        // unset.
         this._setStatus("Room is full.");
         return;
+      }
+
+      // We are now present in the room. Only on the dead path do we
+      // reset game.txt and chat.txt. The reset NEVER touches
+      // presence.txt, because our own presence line is our claim.
+      if (roomIsDead) {
+        try {
+          await this._serialize(() =>
+            this._writeWithRetry(
+              DATA_ROOT + room + "/game.txt",
+              (cur) => (cur === "" ? null : ""),
+              "reset " + room + " game"
+            )
+          );
+        } catch (e) {
+          if (e.message === "BAD_SESSION") {
+            this._handleApiError(e, "reset game");
+            return;
+          }
+          // Best-effort. A second joiner's reset may have already
+          // emptied it.
+        }
+
+        try {
+          await this._serialize(() =>
+            this._writeWithRetry(
+              DATA_ROOT + room + "/chat.txt",
+              (cur) => (cur === "" ? null : ""),
+              "reset " + room + " chat"
+            )
+          );
+        } catch (e) {
+          if (e.message === "BAD_SESSION") {
+            this._handleApiError(e, "reset chat");
+            return;
+          }
+          // Best-effort.
+        }
+      }
+
+      // Refetch presence so this.presenceEntries reflects what is
+      // actually on disk now (may include the other joiner).
+      try {
+        const r = await this._serialize(async () => {
+          const c = await this._fetchTreeContext();
+          const p = await this._readPresenceFromEntries(c.entries, room);
+          return { ctx: c, pres: p };
+        });
+        ctx  = r.ctx;
+        pres = r.pres;
+      } catch (e) {
+        // Non-fatal. The next cycle will refresh presence anyway.
       }
 
       this.room        = room;
@@ -2483,7 +2658,7 @@ export class Battleship extends App {
     }
   }
 
-  // ---------- Cycle scheduler ----------
+  // ---------- Game cycle scheduler ----------
 
   _startCycle() {
     this._stopCycle();
@@ -2780,7 +2955,7 @@ export class Battleship extends App {
     return "coin";
   }
 
-  // ---------- Manual Update ----------
+  // ---------- Game-screen Manual Update ----------
 
   async _manualUpdate() {
     if (this._updating) return;
@@ -4491,7 +4666,7 @@ export class Battleship extends App {
 
   update(dt) {
     const top = this.stack[this.stack.length - 1];
-    if (top !== "username" && top !== "game") return;
+    if (top !== "username" && top !== "game" && top !== "room") return;
 
     this._cursorTimer += dt * 1000;
     if (this._cursorTimer >= CURSOR_MS) {
@@ -4504,6 +4679,10 @@ export class Battleship extends App {
 
     if (top === "game") {
       this._refreshCountdown();
+    }
+
+    if (top === "room") {
+      this._refreshRoomListCountdown();
     }
   }
 }
