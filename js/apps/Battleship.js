@@ -1,7 +1,5 @@
 // Battleship.
 //
-// one line tweak to test deployment remove me plz
-//
 // Second multiplayer app. Modeled on ChatRoom.
 //
 // All app data lives under a per-app subfolder of data/, named after
@@ -102,13 +100,17 @@
 // the enemy board. Misses are pale blue, reading as a splash.
 // Sunk ships use a dark shade of the same hit color.
 //
-// Mobile controls: two Show Controls surfaces. The fire-phase
-// surface overlays Your Waters and reveals a D-pad that moves the
-// fire cursor. The placement-phase surface overlays Enemy Waters
-// and reveals a D-pad that moves the current ship preview on Your
-// Waters. They have separate visibility flags and are never
-// visible at the same time (placement and firing are mutually
-// exclusive game phases).
+// The content layers (myLayer, opLayer) are bare Composites, not
+// Panels. They exist only to hold the fleet / shot Rects and be
+// positioned. A Panel would paint its default self shape over the
+// ocean; a bare Composite paints nothing.
+//
+// Mobile controls: two Show Controls surfaces, at the same screen
+// position (below the action row). Whichever phase is active shows
+// its own toggle there: firing reveals a D-pad over Your Waters,
+// placement reveals a D-pad over Enemy Waters. They have separate
+// visibility flags and are never visible at the same time
+// (placement and firing are mutually exclusive game phases).
 //
 // Shared-file trust model: both players read and write the same
 // game.txt. There is no attempt to hide fleet positions from the
@@ -177,18 +179,20 @@ const BOARD_H = 10;
 
 // ---- Color palette ----
 //
-// Mid grey chrome. The board interiors are ocean blue with black
-// borders. Ships are neutral grey (metal). Hits are red (yours) or
-// green (enemy). Misses are pale blue, reading as a splash.
+// Neutral grey chrome. The board interiors are ocean blue with
+// black borders. Ships are neutral grey (metal). Hits are red
+// (yours) or green (enemy). Misses are pale blue, reading as a
+// splash.
 
-// Screen chrome.
-const BG_SCREEN   = "#2b3038";   // all three screen fills
-const BG_INSET    = "#3a4048";   // username field, chat input panel
-const BG_PANEL    = "#242830";   // end-game panel box
-const BG_CHAT     = "#242a33";   // chat panel / overlay background
+// Screen chrome. Neutral grey (equal R/G/B) so the blue ocean on
+// the boards reads clearly against the surrounding chrome.
+const BG_SCREEN   = "#323232";   // all three screen fills
+const BG_INSET    = "#3e3e3e";   // username field, chat input panel
+const BG_PANEL    = "#2a2a2a";   // end-game panel box
+const BG_CHAT     = "#2a2a2a";   // chat panel / overlay background
 
-const STROKE_INSET = "#5a6570";  // username field, chat input strokes
-const STROKE_PANEL = "#6a7a8a";  // panel / box strokes
+const STROKE_INSET = "#606060";  // username field, chat input strokes
+const STROKE_PANEL = "#6e6e6e";  // panel / box strokes
 
 // Ocean (board interiors).
 const OCEAN_FILL   = "#1a4a7a";  // board interior (the water)
@@ -236,8 +240,8 @@ const BTN_GREEN_FILL   = "#1f8a3f";
 const BTN_GREEN_STROKE = "#4fd97a";
 const BTN_RED_FILL     = "#c02020";
 const BTN_RED_STROKE   = "#ff5050";
-const BTN_DARK_FILL    = "#333a45";
-const BTN_DARK_STROKE  = "#8a8aa8";
+const BTN_DARK_FILL    = "#3a3a3a";
+const BTN_DARK_STROKE  = "#909090";
 
 // base64 helpers. The browser's btoa/atob mishandle non-ASCII.
 
@@ -326,9 +330,10 @@ export class Battleship extends App {
     this.unread   = 0;
     this._seenChatCount = 0;
 
-    // Mobile controls visibility. Two independent surfaces: one for
-    // the fire-phase D-pad (over Your Waters), one for the
-    // placement-phase D-pad (over Enemy Waters).
+    // Mobile controls visibility. Two independent surfaces, both
+    // rendered at the same screen position: one for the fire-phase
+    // D-pad (over Your Waters), one for the placement-phase D-pad
+    // (over Enemy Waters).
     this.controlsVisible          = false;
     this.placementControlsVisible = false;
 
@@ -453,8 +458,8 @@ export class Battleship extends App {
     screen.add(new Button({
       x: 24, y: 24, w: 140, h: 48,
       text: "Return",
-      fill: BTN_DARK_FILL,
-      stroke: BTN_DARK_STROKE,
+      fill: BTN_BLUE_FILL,
+      stroke: BTN_BLUE_STROKE,
       strokeWidth: 2,
       radius: 8,
       textOptions: { font: "bold 18px sans-serif", color: "#ffffff" },
@@ -571,8 +576,8 @@ export class Battleship extends App {
     screen.add(new Button({
       x: 24, y: 24, w: 140, h: 48,
       text: "Return",
-      fill: BTN_DARK_FILL,
-      stroke: BTN_DARK_STROKE,
+      fill: BTN_BLUE_FILL,
+      stroke: BTN_BLUE_STROKE,
       strokeWidth: 2,
       radius: 8,
       textOptions: { font: "bold 18px sans-serif", color: "#ffffff" },
@@ -765,6 +770,12 @@ export class Battleship extends App {
   // Build the two frame composites, the two content layers, the
   // Flip button, and (mobile) the D-pads. The frames are positioned
   // by _layoutBoards so flip is a reposition of existing nodes.
+  //
+  // myLayer and opLayer are bare Composites, NOT Panels. A Panel
+  // with default or null fill would paint a grey self shape over
+  // the ocean. A Composite with no self paints nothing. These
+  // layers exist only to hold the fleet / shot Rects and be
+  // positioned.
   _buildBoardsDesktop(screen) {
     const W = Viewport.width;
 
@@ -785,14 +796,13 @@ export class Battleship extends App {
     this._drawBoardFrame(this.myFrame, boardPx, cell, "YOUR WATERS",  TEXT_LABEL_MY);
     this._drawBoardFrame(this.opFrame, boardPx, cell, "ENEMY WATERS", TEXT_LABEL_OP);
 
-    // Content layers.
-    this.myLayer = new Panel({
+    // Content layers. Bare Composites - no self, so nothing paints
+    // here. Fleet / shot Rects are added as children at render time.
+    this.myLayer = new Composite({
       x: 0, y: 0, w: boardPx, h: boardPx,
-      fill: null, stroke: null,
     });
-    this.opLayer = new Panel({
+    this.opLayer = new Composite({
       x: 0, y: 0, w: boardPx, h: boardPx,
-      fill: null, stroke: null,
     });
     screen.add(this.myLayer);
     screen.add(this.opLayer);
@@ -848,13 +858,13 @@ export class Battleship extends App {
     this._drawBoardFrame(this.myFrame, boardPx, cell, "YOUR WATERS",  TEXT_LABEL_MY);
     this._drawBoardFrame(this.opFrame, boardPx, cell, "ENEMY WATERS", TEXT_LABEL_OP);
 
-    this.myLayer = new Panel({
+    // Content layers. Bare Composites - no self, so nothing paints
+    // over the ocean.
+    this.myLayer = new Composite({
       x: 0, y: 0, w: boardPx, h: boardPx,
-      fill: null, stroke: null,
     });
-    this.opLayer = new Panel({
+    this.opLayer = new Composite({
       x: 0, y: 0, w: boardPx, h: boardPx,
-      fill: null, stroke: null,
     });
     screen.add(this.myLayer);
     screen.add(this.opLayer);
@@ -877,8 +887,9 @@ export class Battleship extends App {
     this.actionRowY = 0;
     this._buildActionRow(screen, 0);
 
-    // Fire-phase Show Controls toggle: below the action row.
-    // Overlays Your Waters. Positioned by _layoutBoards.
+    // Fire-phase Show Controls toggle. Positioned by _layoutBoards,
+    // directly below the action row (same slot the placement-phase
+    // toggle uses). Only one of the two toggles is ever visible.
     this.controlsToggle = new Button({
       x: W / 2 - 160, y: 0, w: 320, h: 52,
       text: "Show Controls",
@@ -892,8 +903,9 @@ export class Battleship extends App {
     this.controlsToggle.visible = false;
     screen.add(this.controlsToggle);
 
-    // Placement-phase Show Controls toggle. Overlays Enemy Waters.
-    // Positioned by _layoutBoards.
+    // Placement-phase Show Controls toggle. Same screen slot as the
+    // fire-phase toggle; positioned by _layoutBoards. Only visible
+    // during the placement phase.
     this.placementControlsToggle = new Button({
       x: W / 2 - 160, y: 0, w: 320, h: 52,
       text: "Show Controls",
@@ -1011,15 +1023,14 @@ export class Battleship extends App {
       this.actionRowY = actionY;
       this._positionActionRow(actionY);
 
-      // Fire-phase controls toggle, below the action row.
+      // Both Show Controls toggles share the same screen slot:
+      // directly below the action row. Only one is visible at a
+      // time (driven by phase in _renderButtons).
       this.controlsToggle.x = W / 2 - this.controlsToggle.w / 2;
       this.controlsToggle.y = actionY + 64;
 
-      // Placement-phase controls toggle, centered vertically over
-      // Enemy Waters. Sits over the enemy board so the placement
-      // D-pad, when revealed, is out of the way of Your Waters.
       this.placementControlsToggle.x = W / 2 - this.placementControlsToggle.w / 2;
-      this.placementControlsToggle.y = this._opBy + boardPx - this.placementControlsToggle.h - 12;
+      this.placementControlsToggle.y = actionY + 64;
 
       this._layoutDpad();
       this._layoutPlacementDpad();
@@ -1165,8 +1176,7 @@ export class Battleship extends App {
       baseline: "middle",
     }));
 
-    // Ocean interior with black border. Drawn as a single filled
-    // rect with a black stroke.
+    // Ocean interior with black border, as a single filled rect.
     composite.add(new Panel({
       x: 0, y: 0,
       w: boardPx, h: boardPx,
