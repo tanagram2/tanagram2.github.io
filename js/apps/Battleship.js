@@ -42,8 +42,28 @@
 // The resolution and the two votes are committed in the same write
 // that flips started to 1, so both clients see the same outcome.
 //
+// Vote-phase button states, for one client:
+//   no vote, not ready : Me blue, Defer blue, Ready grey
+//   voted, not ready   : chosen green, other blue, Ready green
+//   ready              : chosen green, other blue, Ready red "Unready"
+//                        (Me and Defer grey while Unready shows)
+// Any vote or ready write greys all three buttons while it is in
+// flight, so a choice being committed reads the same regardless of
+// which button was pressed.
+//
+// End-of-game panel: when someone wins, a modal panel shows "You
+// win!" or "You lose." with Rematch and Exit buttons. Rematch is a
+// two-player handshake stored in #META as rematchP0 / rematchP1.
+// Pressing Rematch sets your flag (button turns red, label becomes
+// Cancel, Exit greys). Pressing Cancel clears it. When both flags
+// are set, the next cycle writer resets the game to the pre-vote
+// state in one commit: started back to 0, votes and ready flags
+// cleared, fleets and shots cleared, rematch flags cleared,
+// turnCount reset to 0. Names are preserved. Exit calls the same
+// path as Leave.
+//
 // All writes to game.txt that come from a single player's action
-// (vote, ready, lock in, fire) are shaped as:
+// (vote, ready, lock in, fire, rematch) are shaped as:
 //
 //     (currentContent) => { decode; apply only my change; encode; }
 //
@@ -176,7 +196,7 @@ const BUSY_FILL   = "#4a4a4a";
 const BUSY_STROKE = "#9a9a9a";
 
 // Named resting colors for buttons whose base color changes with
-// state (vote, ready/unready, lock in, fire). Applied via
+// state (vote, ready/unready, lock in, fire, rematch). Applied via
 // setBaseStyle so hover and press merge over the CURRENT resting
 // color instead of a stale snapshot from construction time.
 
@@ -268,6 +288,9 @@ export class Battleship extends App {
     this.myVote   = null;           // "me" | "defer" | null
     this.myReady  = false;
 
+    // Rematch state (local mirror of the shared values).
+    this.myRematch = false;
+
     // Chat UI.
     this.chatOpen = false;
     this.unread   = 0;
@@ -292,6 +315,7 @@ export class Battleship extends App {
     this._updating = false;
     this._placingWrite = false;
     this._votingWrite  = false;
+    this._rematchWrite = false;
     this._firing       = false;
 
     this._cursorOn    = true;
@@ -694,6 +718,11 @@ export class Battleship extends App {
     });
     screen.add(this.unreadBadge);
 
+    // End-of-game modal (hidden by default). Built before the chat
+    // overlay so chat can still open on top of it if the player
+    // wants to talk after the game ends.
+    this._buildEndPanel(screen);
+
     // Chat overlay (hidden by default).
     this._buildChatPanel(screen);
 
@@ -1050,6 +1079,105 @@ export class Battleship extends App {
     }
   }
 
+  // ---------- End-of-game panel ----------
+
+  _buildEndPanel(screen) {
+    const W = Viewport.width;
+    const H = Viewport.height;
+
+    const overlay = new Panel({
+      x: 0, y: 0, w: "100%", h: "100%",
+      self: new Rect({ fill: "rgba(0, 0, 0, 0.55)", stroke: null }),
+    });
+    overlay.visible = false;
+    screen.add(overlay);
+    this.endPanel = overlay;
+
+    const panelW = this.mobile ? 560 : 480;
+    const panelH = this.mobile ? 320 : 260;
+    const panelX = (W - panelW) / 2;
+    const panelY = (H - panelH) / 2;
+
+    const box = new Panel({
+      x: panelX, y: panelY,
+      w: panelW, h: panelH,
+      fill: "#1a2434",
+      stroke: "#5a7ea8",
+      strokeWidth: 3,
+      radius: 12,
+    });
+    overlay.add(box);
+
+    this.endTitleLabel = new Text({
+      x: panelW / 2, y: 70,
+      text: "",
+      font: this.mobile ? "bold 40px sans-serif" : "bold 34px sans-serif",
+      color: "#d8e4f7",
+      align: "center",
+      baseline: "middle",
+    });
+    box.add(this.endTitleLabel);
+
+    const btnW = this.mobile ? 220 : 180;
+    const btnH = this.mobile ? 72 : 56;
+    const gap  = 24;
+    const totalW = btnW * 2 + gap;
+    const btnY = panelH - btnH - 40;
+
+    this.rematchBtn = new Button({
+      x: (panelW - totalW) / 2, y: btnY, w: btnW, h: btnH,
+      text: "Rematch",
+      fill: BTN_GREEN_FILL,
+      stroke: BTN_GREEN_STROKE,
+      strokeWidth: 2,
+      radius: 8,
+      textOptions: {
+        font: this.mobile ? "bold 24px sans-serif" : "bold 20px sans-serif",
+        color: "#ffffff",
+      },
+      onClick: () => this._toggleRematch(),
+    });
+    box.add(this.rematchBtn);
+
+    this.endExitBtn = new Button({
+      x: (panelW - totalW) / 2 + btnW + gap, y: btnY, w: btnW, h: btnH,
+      text: "Exit",
+      fill: BTN_DARK_FILL,
+      stroke: BTN_DARK_STROKE,
+      strokeWidth: 2,
+      radius: 8,
+      textOptions: {
+        font: this.mobile ? "bold 24px sans-serif" : "bold 20px sans-serif",
+        color: "#ffffff",
+      },
+      onClick: () => this._leaveRoom(),
+    });
+    box.add(this.endExitBtn);
+  }
+
+  // Apply the current this.myRematch and this._rematchWrite flags to
+  // the end-panel button styles. Called from _renderAll and after
+  // every rematch toggle.
+  _renderEndPanelButtons() {
+    if (!this.rematchBtn || !this.endExitBtn) return;
+
+    const busy = this._rematchWrite;
+    const rematched = this.myRematch;
+
+    if (busy) {
+      this.rematchBtn.setBaseStyle({ fill: BUSY_FILL, stroke: BUSY_STROKE });
+      this.endExitBtn.setBaseStyle({ fill: BUSY_FILL, stroke: BUSY_STROKE });
+    } else if (rematched) {
+      this.rematchBtn.setText("Cancel");
+      this.rematchBtn.setBaseStyle({ fill: BTN_RED_FILL, stroke: BTN_RED_STROKE });
+      this.endExitBtn.setBaseStyle({ fill: BUSY_FILL, stroke: BUSY_STROKE });
+    } else {
+      this.rematchBtn.setText("Rematch");
+      this.rematchBtn.setBaseStyle({ fill: BTN_GREEN_FILL, stroke: BTN_GREEN_STROKE });
+      this.endExitBtn.setBaseStyle({ fill: BTN_DARK_FILL, stroke: BTN_DARK_STROKE });
+    }
+  }
+
   // ---------- Action row ----------
 
   _buildActionRow(screen, actionY) {
@@ -1058,10 +1186,11 @@ export class Battleship extends App {
 
     // Vote-phase label. Shown only while the handshake is active.
     // Positioned above the action row, same slot as outcomeLabel.
+    // Text is set by _renderButtons from this.myVote.
     this.voteLabel = new Text({
       x: W / 2,
       y: actionY - 30,
-      text: "Choose who goes first",
+      text: "Choose who goes first:",
       font: mobile ? "bold 20px sans-serif" : "bold 16px sans-serif",
       color: "#a0c0ff",
       align: "center",
@@ -2162,11 +2291,13 @@ export class Battleship extends App {
       this.lastFeedback = "";
       this.myVote  = null;
       this.myReady = false;
+      this.myRematch = false;
       this.chatOpen = false;
       this.controlsVisible = false;
       this.flipped = false;
       if (this.chatPanel) this.chatPanel.visible = false;
       if (this.chatKeyboard) this.chatKeyboard.visible = false;
+      if (this.endPanel) this.endPanel.visible = false;
       this.unread = 0;
 
       this._layoutBoards();
@@ -2310,7 +2441,7 @@ export class Battleship extends App {
       }
       this.game = this._decodeGame(gameContent);
 
-      // Resolve the first-turn handshake.
+      // First-turn handshake resolve.
       const needsResolve = this.game
         && !this.game.started
         && this.game.voteP0 && this.game.voteP1
@@ -2348,11 +2479,75 @@ export class Battleship extends App {
               g.voteP1    = "";
               g.readyP0   = false;
               g.readyP1   = false;
+              g.rematchP0 = false;
+              g.rematchP1 = false;
 
               resolvedGame = g;
               return self._encodeGame(g);
             },
             "resolve first turn",
+            hint
+          );
+          if (result.retried) retried = true;
+          if (result.ok && resolvedGame) {
+            this.game = resolvedGame;
+          }
+        } catch (e) {
+          if (e && e.message === "BAD_SESSION") throw e;
+          // Next cycle retries.
+        }
+      }
+
+      // Rematch handshake resolve. Runs only when a winner is set
+      // and both players have flagged rematch. Single write resets
+      // the game back to pre-vote state.
+      const needsRematchResolve = this.game
+        && this.game.winner != null
+        && this.game.rematchP0 && this.game.rematchP1;
+
+      if (needsRematchResolve) {
+        const hint = {
+          commitSha: ctx.commitSha,
+          treeSha:   ctx.treeSha,
+          entries:   ctx.entries,
+          content:   gameContent,
+        };
+
+        const self = this;
+        let resolvedGame = null;
+
+        try {
+          const result = await this._writeWithRetry(
+            gamePath,
+            (currentContent) => {
+              const g = self._decodeGame(currentContent);
+              if (g.winner == null) return null;
+              if (!g.rematchP0 || !g.rematchP1) return null;
+
+              g.started   = false;
+              g.turn      = null;
+              g.turnCount = 0;
+              g.winner    = null;
+              g.firstMode = "";
+              g.voteP0    = "";
+              g.voteP1    = "";
+              g.readyP0   = false;
+              g.readyP1   = false;
+              g.rematchP0 = false;
+              g.rematchP1 = false;
+
+              // Preserve names, clear fleets and shots.
+              for (let p = 0; p < SLOTS; p++) {
+                const key = "p" + p;
+                if (!g.players[key]) g.players[key] = { name: "", fleet: [], shots: [] };
+                g.players[key].fleet = [];
+                g.players[key].shots = [];
+              }
+
+              resolvedGame = g;
+              return self._encodeGame(g);
+            },
+            "resolve rematch",
             hint
           );
           if (result.retried) retried = true;
@@ -2386,6 +2581,7 @@ export class Battleship extends App {
         this._seenChatCount = newChatLines.length;
       }
 
+      this._syncVoteMirror();
       this._renderAll();
       this._renderChatLog();
       this._renderUnreadBadge();
@@ -2421,6 +2617,22 @@ export class Battleship extends App {
     });
 
     return retried;
+  }
+
+  // Re-derive local vote / ready / rematch mirrors from the shared
+  // game state. Called after every cycle so both clients agree on
+  // what the buttons should show.
+  _syncVoteMirror() {
+    if (!this.game || this.slot === null) return;
+    const mySlot = this.slot;
+    const g = this.game;
+
+    if (!g.started) {
+      this.myVote  = (mySlot === 0 ? g.voteP0 : g.voteP1) || null;
+      this.myReady = (mySlot === 0 ? g.readyP0 : g.readyP1);
+    }
+
+    this.myRematch = (mySlot === 0 ? g.rematchP0 : g.rematchP1);
   }
 
   _resolveFirstTurn(v0, v1) {
@@ -2501,6 +2713,8 @@ export class Battleship extends App {
     L.push("voteP1=" + (g.voteP1 || ""));
     L.push("readyP0=" + (g.readyP0 ? 1 : 0));
     L.push("readyP1=" + (g.readyP1 ? 1 : 0));
+    L.push("rematchP0=" + (g.rematchP0 ? 1 : 0));
+    L.push("rematchP1=" + (g.rematchP1 ? 1 : 0));
 
     for (let p = 0; p < SLOTS; p++) {
       L.push("#PLAYER " + p);
@@ -2543,6 +2757,8 @@ export class Battleship extends App {
       voteP1: "",
       readyP0: false,
       readyP1: false,
+      rematchP0: false,
+      rematchP1: false,
       players: {},
     };
     if (!text) return g;
@@ -2576,6 +2792,8 @@ export class Battleship extends App {
         else if (k === "voteP1") g.voteP1 = v;
         else if (k === "readyP0") g.readyP0 = v === "1";
         else if (k === "readyP1") g.readyP1 = v === "1";
+        else if (k === "rematchP0") g.rematchP0 = v === "1";
+        else if (k === "rematchP1") g.rematchP1 = v === "1";
       } else if (section === "player" && playerIdx >= 0) {
         const pl = g.players["p" + playerIdx];
         if (k === "name") pl.name = v;
@@ -2624,9 +2842,7 @@ export class Battleship extends App {
 
     this._votingWrite = true;
     this._setStatus("Recording vote...");
-
-    const btn = (vote === "me") ? this.voteMeBtn : this.voteDeferBtn;
-    this._busyStart(btn);
+    this._renderAll();
 
     const mySlot = this.slot;
     const self   = this;
@@ -2663,7 +2879,7 @@ export class Battleship extends App {
       });
 
       await this._refreshGameMirror();
-      this.myVote = vote;
+      this._syncVoteMirror();
       this._clearStatus();
       this._renderAll();
 
@@ -2672,7 +2888,7 @@ export class Battleship extends App {
       this._handleApiError(e, "vote");
     } finally {
       this._votingWrite = false;
-      this._busyEnd(btn);
+      this._renderAll();
     }
   }
 
@@ -2686,7 +2902,7 @@ export class Battleship extends App {
     this._votingWrite = true;
     const wasReady = this.myReady;
     this._setStatus(wasReady ? "Unreadying..." : "Readying...");
-    this._busyStart(this.readyBtn);
+    this._renderAll();
 
     const mySlot = this.slot;
     const self   = this;
@@ -2724,8 +2940,7 @@ export class Battleship extends App {
       });
 
       await this._refreshGameMirror();
-      this.myVote  = (mySlot === 0 ? this.game.voteP0 : this.game.voteP1) || this.myVote;
-      this.myReady = (mySlot === 0 ? this.game.readyP0 : this.game.readyP1);
+      this._syncVoteMirror();
       this._clearStatus();
       this._renderAll();
 
@@ -2734,7 +2949,7 @@ export class Battleship extends App {
       this._handleApiError(e, "ready");
     } finally {
       this._votingWrite = false;
-      this._busyEnd(this.readyBtn);
+      this._renderAll();
     }
   }
 
@@ -2748,6 +2963,64 @@ export class Battleship extends App {
       if (entry) content = await self._readBlob(entry.sha);
       self.game = self._decodeGame(content);
     });
+  }
+
+  // =================================================================
+  // Rematch.
+  // =================================================================
+
+  async _toggleRematch() {
+    if (this._rematchWrite) return;
+    if (!this.game) return;
+    if (this.game.winner == null) return;
+
+    this._rematchWrite = true;
+    this._renderAll();
+
+    const mySlot = this.slot;
+    const self   = this;
+
+    try {
+      await this._serialize(async () => {
+        const ctx = await self._fetchTreeContext();
+        const gamePath = DATA_ROOT + self.room + "/game.txt";
+        const entry = ctx.entries.get(gamePath);
+        let content = "";
+        if (entry) content = await self._readBlob(entry.sha);
+
+        const hint = {
+          commitSha: ctx.commitSha,
+          treeSha:   ctx.treeSha,
+          entries:   ctx.entries,
+          content:   content,
+        };
+
+        await self._writeWithRetry(
+          gamePath,
+          (currentContent) => {
+            const g = self._decodeGame(currentContent);
+            if (g.winner == null) return null;
+            const rematchKey = "rematchP" + mySlot;
+            const nextRematch = !g[rematchKey];
+            g[rematchKey] = nextRematch;
+            return self._encodeGame(g);
+          },
+          "rematch " + mySlot,
+          hint
+        );
+      });
+
+      await this._refreshGameMirror();
+      this._syncVoteMirror();
+      this._renderAll();
+
+      this._kickCycle();
+    } catch (e) {
+      this._handleApiError(e, "rematch");
+    } finally {
+      this._rematchWrite = false;
+      this._renderAll();
+    }
   }
 
   // =================================================================
@@ -3290,6 +3563,7 @@ export class Battleship extends App {
     this._renderOpBoard();
     this._renderButtons();
     this._renderOutcomeBanner();
+    this._renderEndPanel();
     this._renderUnreadBadge();
   }
 
@@ -3549,13 +3823,33 @@ export class Battleship extends App {
 
     if (this.voteLabel) {
       this.voteLabel.visible = !!votePhase;
+      if (votePhase) {
+        const choice = this.myVote === "me" ? "Me"
+                     : this.myVote === "defer" ? "Defer"
+                     : "";
+        this.voteLabel.text = choice
+          ? "Choose who goes first: " + choice
+          : "Choose who goes first:";
+      }
     }
 
     if (votePhase) {
-      if (this.myReady) {
+      if (this._votingWrite) {
+        // Any vote or ready write in flight greys all three. This
+        // is the visual signal that a commit is being processed.
         this.voteMeBtn.setBaseStyle({ fill: BUSY_FILL, stroke: BUSY_STROKE });
         this.voteDeferBtn.setBaseStyle({ fill: BUSY_FILL, stroke: BUSY_STROKE });
+        this.readyBtn.setBaseStyle({ fill: BUSY_FILL, stroke: BUSY_STROKE });
+      } else if (this.myReady) {
+        // Ready state: chosen green, other blue, Ready red Unready.
+        // Me and Defer grey to indicate they are not pressable
+        // until Unready is recorded.
+        this.voteMeBtn.setBaseStyle({ fill: BUSY_FILL, stroke: BUSY_STROKE });
+        this.voteDeferBtn.setBaseStyle({ fill: BUSY_FILL, stroke: BUSY_STROKE });
+        this.readyBtn.setText("Unready");
+        this.readyBtn.setBaseStyle({ fill: BTN_RED_FILL, stroke: BTN_RED_STROKE });
       } else {
+        // Not ready: chosen green, other blue, Ready green or grey.
         if (this.myVote === "me") {
           this.voteMeBtn.setBaseStyle({ fill: BTN_GREEN_FILL, stroke: BTN_GREEN_STROKE });
         } else {
@@ -3566,16 +3860,13 @@ export class Battleship extends App {
         } else {
           this.voteDeferBtn.setBaseStyle({ fill: BTN_BLUE_FILL, stroke: BTN_BLUE_STROKE });
         }
-      }
 
-      this.readyBtn.setText(this.myReady ? "Unready" : "Ready");
-
-      if (this.myReady) {
-        this.readyBtn.setBaseStyle({ fill: BTN_RED_FILL, stroke: BTN_RED_STROKE });
-      } else if (this.myVote) {
-        this.readyBtn.setBaseStyle({ fill: BTN_GREEN_FILL, stroke: BTN_GREEN_STROKE });
-      } else {
-        this.readyBtn.setBaseStyle({ fill: BUSY_FILL, stroke: BUSY_STROKE });
+        this.readyBtn.setText("Ready");
+        if (this.myVote) {
+          this.readyBtn.setBaseStyle({ fill: BTN_GREEN_FILL, stroke: BTN_GREEN_STROKE });
+        } else {
+          this.readyBtn.setBaseStyle({ fill: BUSY_FILL, stroke: BUSY_STROKE });
+        }
       }
     }
 
@@ -3722,6 +4013,22 @@ export class Battleship extends App {
     this.outcomeLabel.visible = true;
   }
 
+  // Show or hide the end-of-game panel from game.winner.
+  _renderEndPanel() {
+    if (!this.endPanel) return;
+
+    const g = this.game;
+    const show = !!(g && g.winner != null);
+
+    this.endPanel.visible = show;
+    if (!show) return;
+
+    const iWon = (g.winner === this.slot);
+    this.endTitleLabel.text = iWon ? "You win!" : "You lose.";
+
+    this._renderEndPanelButtons();
+  }
+
   // =================================================================
   // Input.
   // =================================================================
@@ -3785,6 +4092,10 @@ export class Battleship extends App {
   _handleGameKey(e) {
     const k = e.key;
 
+    // While the end panel is up, board keys are inert. The buttons
+    // are handled by the router.
+    if (this.endPanel && this.endPanel.visible) return;
+
     if (this.placing) {
       if (k === "r" || k === "R") { this._rotatePlace(); return; }
       if (k === "ArrowLeft" || k === "a" || k === "A") {
@@ -3833,6 +4144,8 @@ export class Battleship extends App {
   }
 
   _handleGameMouseMove(e) {
+    if (this.endPanel && this.endPanel.visible) return;
+
     if (this.mobile && this.placing && this._dragPlace) {
       const c = this._cellFromPoint(e.x, e.y, this._myBx, this._myBy);
       if (c) {
@@ -3872,6 +4185,8 @@ export class Battleship extends App {
   }
 
   _handleGameMouseDown(e) {
+    if (this.endPanel && this.endPanel.visible) return;
+
     if (this.mobile && this.placing) {
       const c = this._cellFromPoint(e.x, e.y, this._myBx, this._myBy);
       if (c) {
@@ -3910,6 +4225,8 @@ export class Battleship extends App {
   }
 
   _handleGameMouseUp(e) {
+    if (this.endPanel && this.endPanel.visible) return;
+
     if (this.mobile && this.placing && this._dragPlace) {
       this._dragPlace = false;
 
