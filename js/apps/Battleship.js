@@ -67,6 +67,13 @@
 // presence file resolves the race. If the room fills under the
 // callback, it returns null and the join surfaces "Room is full".
 //
+// Sunk ships: a ship is sunk when every one of its cells has been
+// hit. A sunk ship's cells are drawn in a darker shade of the shot
+// color (dark red on your board, dark green on the enemy board),
+// and the per-hit overlay for that ship is skipped. The feedback
+// line says "Sunk! - fire again" instead of "HIT - fire again",
+// and "Sunk! - you win!" when the sinking shot wins the game.
+//
 // Boards are built as two frame composites (myFrame, opFrame) plus
 // two content layers (myLayer, opLayer). The frame composites hold
 // the label, the backing panel, and the grid lines. A Flip button
@@ -146,6 +153,17 @@ const FLEET = [
 
 const BOARD_W = 10;
 const BOARD_H = 10;
+
+// Board cell colors. Hits and sunk ships share the same palette.
+// Green is good (you hit the enemy), red is bad (your ships took a
+// hit). A sunk ship uses a darker shade of the same color.
+
+const COLOR_MY_SHIP       = "#3a5878";
+const COLOR_MY_HIT        = "#c04040";
+const COLOR_MY_SUNK       = "#4a0e0e";
+const COLOR_OP_HIT        = "#40c060";
+const COLOR_OP_SUNK       = "#0a4018";
+const COLOR_MISS          = "#404850";
 
 // Busy-button colors. The helper swaps the self shape's fill and
 // stroke to the busy pair while a git request is in flight, and
@@ -833,7 +851,6 @@ export class Battleship extends App {
         onClick: () => this._nudgeFireCursor(d.dir),
       });
       b.visible = false;
-      this._dpadDir = this._dpadDir || {};
       b._dir = d.dir;
       screen.add(b);
       this.dpadButtons.push(b);
@@ -969,9 +986,9 @@ export class Battleship extends App {
     }
   }
 
-  // Reposition the mobile action row buttons when the lower board
-  // moves. Each button was placed at construction with a specific
-  // x; only its y needs to move with the row.
+  // Reposition the mobile action-row buttons to a new y. Called by
+  // _layoutBoards when the lower board moves. Buttons keep their
+  // construction-time x.
   _positionActionRow(actionY) {
     if (!this.mobile) return;
 
@@ -1289,35 +1306,6 @@ export class Battleship extends App {
     });
     this.outcomeLabel.visible = false;
     screen.add(this.outcomeLabel);
-  }
-
-  // Reposition the mobile action-row buttons to a new y. Called by
-  // _layoutBoards when the lower board moves. Buttons keep their
-  // construction-time x.
-  _positionActionRow(actionY) {
-    if (!this.mobile) return;
-
-    const row = [
-      this.voteMeBtn,
-      this.voteDeferBtn,
-      this.readyBtn,
-      this.placeBtn,
-      this.lockBtn,
-      this.rotateBtn,
-      this.nextBtn,
-      this.resetBtn,
-      this.fireBtn,
-    ];
-    for (const b of row) {
-      if (b) b.y = actionY;
-    }
-
-    if (this.outcomeLabel) {
-      this.outcomeLabel.y = actionY - 30;
-    }
-    if (this.voteLabel) {
-      this.voteLabel.y = actionY - 30;
-    }
   }
 
   // Toggle the board layout. Convenience only. Swaps the four
@@ -2968,6 +2956,37 @@ export class Battleship extends App {
     return false;
   }
 
+  // Is this specific ship fully hit in the given shot list?
+  _isShipSunk(ship, shots) {
+    for (const c of ship.cells) {
+      let hit = false;
+      for (const sh of shots) {
+        if (sh.hit && sh.x === c.x && sh.y === c.y) {
+          hit = true;
+          break;
+        }
+      }
+      if (!hit) return false;
+    }
+    return true;
+  }
+
+  // Is the ship whose cells contain (x, y) now fully hit?
+  _isShipContainingSunk(fleet, shots, x, y) {
+    for (const ship of fleet) {
+      let contains = false;
+      for (const c of ship.cells) {
+        if (c.x === x && c.y === y) {
+          contains = true;
+          break;
+        }
+      }
+      if (!contains) continue;
+      return this._isShipSunk(ship, shots);
+    }
+    return false;
+  }
+
   _allShipsSunk(fleet, shots) {
     let total = 0;
     for (const s of fleet) total += s.len;
@@ -3094,11 +3113,16 @@ export class Battleship extends App {
             const hit = self._hitShip(opp.fleet, cx, cy);
             my.shots.push({ x: cx, y: cy, hit });
 
-            if (self._allShipsSunk(opp.fleet, my.shots)) {
+            const sunk = hit && self._isShipContainingSunk(opp.fleet, my.shots, cx, cy);
+            const won  = self._allShipsSunk(opp.fleet, my.shots);
+
+            if (won) {
               g.winner = mySlot;
               g.turn   = null;
               g.turnCount = (g.turnCount || 0) + 1;
-              self.lastFeedback = "HIT - you win!";
+              self.lastFeedback = sunk ? "Sunk! - you win!" : "HIT - you win!";
+            } else if (sunk) {
+              self.lastFeedback = "Sunk! - fire again";
             } else if (hit) {
               self.lastFeedback = "HIT - fire again";
             } else {
@@ -3179,7 +3203,7 @@ export class Battleship extends App {
         t.text = truncate(raw, this.mobile ? 40 : 52);
         continue;
       }
-      const line = "[" + formatTime(parsed.iso) + "]" + parsed.username + ":" + parsed.text;
+      const line = "[" + formatTime(parsed.iso) + "]" + parsed.username + ": " + parsed.text;
       t.text = truncate(line, this.mobile ? 40 : 52);
     }
   }
@@ -3323,35 +3347,44 @@ export class Battleship extends App {
       fleet = this.game.players["p" + this.slot].fleet;
     }
 
+    // Shots by the opponent at my board (for sunk detection and the
+    // per-hit overlay).
+    let oppShots = null;
+    if (this.game && this.game.players) {
+      const opp = this.game.players["p" + (1 - this.slot)];
+      oppShots = (opp && opp.shots) ? opp.shots : null;
+    }
+
     if (fleet) {
       for (const ship of fleet) {
+        const sunk = oppShots ? this._isShipSunk(ship, oppShots) : false;
         for (const c of ship.cells) {
           this.myLayer.add(new Rect({
             x: c.x * cell + 1,
             y: c.y * cell + 1,
             w: cell - 2,
             h: cell - 2,
-            fill: "#3a5878",
+            fill: sunk ? COLOR_MY_SUNK : COLOR_MY_SHIP,
             stroke: null,
           }));
         }
       }
     }
 
-    if (this.game && this.game.players) {
-      const oppKey = "p" + (1 - this.slot);
-      const opp = this.game.players[oppKey];
-      if (opp && opp.shots) {
-        for (const s of opp.shots) {
-          this.myLayer.add(new Rect({
-            x: s.x * cell + 1,
-            y: s.y * cell + 1,
-            w: cell - 2,
-            h: cell - 2,
-            fill: s.hit ? "#c04040" : "#404850",
-            stroke: null,
-          }));
-        }
+    if (oppShots) {
+      for (const s of oppShots) {
+        // Skip cells that belong to a sunk ship: the ship already
+        // draws in the dark sunk color and the overlay would cover
+        // it.
+        if (s.hit && this._shipAtIsSunk(fleet, oppShots, s.x, s.y)) continue;
+        this.myLayer.add(new Rect({
+          x: s.x * cell + 1,
+          y: s.y * cell + 1,
+          w: cell - 2,
+          h: cell - 2,
+          fill: s.hit ? COLOR_MY_HIT : COLOR_MISS,
+          stroke: null,
+        }));
       }
     }
 
@@ -3383,22 +3416,68 @@ export class Battleship extends App {
     }
   }
 
+  // True if the ship whose cells contain (x, y) is fully hit in
+  // `shots`. Returns false if (x, y) is not on any ship.
+  _shipAtIsSunk(fleet, shots, x, y) {
+    if (!fleet) return false;
+    for (const ship of fleet) {
+      let contains = false;
+      for (const c of ship.cells) {
+        if (c.x === x && c.y === y) {
+          contains = true;
+          break;
+        }
+      }
+      if (!contains) continue;
+      return this._isShipSunk(ship, shots);
+    }
+    return false;
+  }
+
   _renderOpBoard() {
     if (!this.opLayer) return;
     this.opLayer.children.length = 0;
 
     const cell = this._cell;
 
+    // My shots at the enemy board.
+    let myShots = null;
+    let oppFleet = null;
     if (this.game && this.game.players) {
-      const me = this.game.players["p" + this.slot];
-      if (me && me.shots) {
-        for (const s of me.shots) {
+      const me  = this.game.players["p" + this.slot];
+      const opp = this.game.players["p" + (1 - this.slot)];
+      myShots  = (me && me.shots) ? me.shots : null;
+      oppFleet = (opp && opp.fleet) ? opp.fleet : null;
+    }
+
+    if (myShots) {
+      for (const s of myShots) {
+        // Skip cells that belong to a sunk enemy ship: that ship is
+        // rendered separately below in dark green.
+        if (s.hit && this._shipAtIsSunk(oppFleet, myShots, s.x, s.y)) continue;
+        this.opLayer.add(new Rect({
+          x: s.x * cell + 1,
+          y: s.y * cell + 1,
+          w: cell - 2,
+          h: cell - 2,
+          fill: s.hit ? COLOR_OP_HIT : COLOR_MISS,
+          stroke: null,
+        }));
+      }
+    }
+
+    // Sunk enemy ships: draw every cell of each sunk ship in dark
+    // green, so the whole ship reads as down.
+    if (oppFleet && myShots) {
+      for (const ship of oppFleet) {
+        if (!this._isShipSunk(ship, myShots)) continue;
+        for (const c of ship.cells) {
           this.opLayer.add(new Rect({
-            x: s.x * cell + 1,
-            y: s.y * cell + 1,
+            x: c.x * cell + 1,
+            y: c.y * cell + 1,
             w: cell - 2,
             h: cell - 2,
-            fill: s.hit ? "#c04040" : "#404850",
+            fill: COLOR_OP_SUNK,
             stroke: null,
           }));
         }
