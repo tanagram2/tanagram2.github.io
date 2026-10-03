@@ -1,7 +1,7 @@
 #META
 started=1
-turn=1
-turnCount=1
+turn=0
+turnCount=2
 winner=-1
 firstMode=p2
 voteP0=
@@ -17,4 +17,4 @@ shots=
 #PLAYER 1
 name=MOTIV
 fleet=0,0:1,0:2,0:3,0:4,0;4,6:5,6:6,6:7,6;2,3:3,3:4,3;2,8:3,8:4,8;8,4:9,4
-shots=
+shots=0,0,0
