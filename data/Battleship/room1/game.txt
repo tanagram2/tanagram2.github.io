@@ -1,7 +1,7 @@
 #META
 started=1
-turn=1
-turnCount=2
+turn=0
+turnCount=3
 winner=-1
 firstMode=p1
 voteP0=
@@ -17,4 +17,4 @@ shots=1,2,0
 #PLAYER 1
 name=PODE
 fleet=7,1:7,2:7,3:7,4:7,5;9,1:9,2:9,3:9,4;1,0:2,0:3,0;0,8:1,8:2,8;6,8:7,8
-shots=1,0,1
+shots=1,0,1|6,4,0
