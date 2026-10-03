@@ -7,7 +7,7 @@ firstMode=
 voteP0=me
 voteP1=defer
 readyP0=1
-readyP1=0
+readyP1=1
 #PLAYER 0
 name=
 fleet=
