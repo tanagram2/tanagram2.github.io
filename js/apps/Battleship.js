@@ -94,20 +94,19 @@
 // line says "Sunk! - fire again" instead of "HIT - fire again",
 // and "Sunk! - you win!" when the sinking shot wins the game.
 //
-// Boards are built as two frame composites (myFrame, opFrame) plus
-// two content layers (myLayer, opLayer). The frame composites hold
-// the label, the backing panel, and the grid lines. A Flip button
-// swaps the four anchor constants and repositions the four
-// composites, so the convenience flip is a repositioning of
-// existing nodes, not a rebuild. Game logic, slot identity, and
-// hit-test semantics do not change with flip.
+// Boards: each board is drawn as an ocean-blue interior with a
+// black border, and a lighter blue grid on top. Ships are neutral
+// grey (metal on water). Hits are red on your board and green on
+// the enemy board. Misses are pale blue, reading as a splash.
+// Sunk ships use a dark shade of the same hit color.
 //
-// Mobile pass: the layout branches on Viewport.isMobile. Boards
-// stack vertically. Placement uses tap+drag on the board plus a
-// Rotate and Next button. Firing uses tap+drag on the enemy board,
-// a cursor that is always visible on your turn, and an optional
-// D-pad that overlays the player's own board. Chat opens as a
-// full-screen overlay with a Hide button in its top-right corner.
+// Mobile controls: two Show Controls surfaces. The fire-phase
+// surface overlays Your Waters and reveals a D-pad that moves the
+// fire cursor. The placement-phase surface overlays Enemy Waters
+// and reveals a D-pad that moves the current ship preview on Your
+// Waters. They have separate visibility flags and are never
+// visible at the same time (placement and firing are mutually
+// exclusive game phases).
 //
 // Shared-file trust model: both players read and write the same
 // game.txt. There is no attempt to hide fleet positions from the
@@ -176,34 +175,33 @@ const BOARD_H = 10;
 
 // ---- Color palette ----
 //
-// Mid grey chrome, blue ocean, bright accent colors. Higher hex
-// values than the earlier pass so the app reads with more contrast
-// against the grey background. Board interiors are blue (ocean);
-// the chrome around them is grey.
+// Mid grey chrome. The board interiors are ocean blue with black
+// borders. Ships are neutral grey (metal). Hits are red (yours) or
+// green (enemy). Misses are pale blue, reading as a splash.
 
 // Screen chrome.
 const BG_SCREEN   = "#2b3038";   // all three screen fills
 const BG_INSET    = "#3a4048";   // username field, chat input panel
-const BG_PANEL    = "#242830";   // end-game panel box, chat overlay box
+const BG_PANEL    = "#242830";   // end-game panel box
 const BG_CHAT     = "#242a33";   // chat panel / overlay background
 
 const STROKE_INSET = "#5a6570";  // username field, chat input strokes
 const STROKE_PANEL = "#6a7a8a";  // panel / box strokes
 
 // Ocean (board interiors).
-const OCEAN_FILL   = "#153a5a";  // board backing panel fill
-const OCEAN_GRID   = "#3a6a90";  // board grid lines
-const OCEAN_FRAME  = "#0a1e30";  // board outer frame stroke
+const OCEAN_FILL   = "#1a4a7a";  // board interior (the water)
+const OCEAN_GRID   = "#3a7ab0";  // board grid lines
+const OCEAN_BORDER = "#000000";  // board border
 
-// Board cell colors. Green is good (you hit the enemy), red is bad
-// (your ships took a hit). A sunk ship uses a darker shade of the
-// same color.
-const COLOR_MY_SHIP       = "#4a7aa8";
-const COLOR_MY_HIT        = "#e03030";
-const COLOR_MY_SUNK       = "#5a0a0a";
-const COLOR_OP_HIT        = "#30d060";
-const COLOR_OP_SUNK       = "#083a10";
-const COLOR_MISS          = "#5a6070";
+// Board cell colors. Ships are neutral grey. Hits are red (your
+// board) or green (enemy board). Misses are a pale-blue splash.
+// A sunk ship uses a darker shade of the same hit color.
+const COLOR_SHIP          = "#b0b0b0";  // grey metal ships
+const COLOR_MY_HIT        = "#e03030";  // your ship, hit
+const COLOR_MY_SUNK       = "#5a0a0a";  // your ship, sunk
+const COLOR_OP_HIT        = "#30d060";  // enemy ship, hit
+const COLOR_OP_SUNK       = "#083a10";  // enemy ship, sunk
+const COLOR_MISS          = "#b0d8f0";  // splash
 const COLOR_PLACE_OK      = "#30c060";
 const COLOR_PLACE_BAD     = "#d04040";
 const COLOR_FIRE_CURSOR   = "#ffcc33";
@@ -326,8 +324,11 @@ export class Battleship extends App {
     this.unread   = 0;
     this._seenChatCount = 0;
 
-    // Mobile controls visibility (fire phase only).
-    this.controlsVisible = false;
+    // Mobile controls visibility. Two independent surfaces: one for
+    // the fire-phase D-pad (over Your Waters), one for the
+    // placement-phase D-pad (over Enemy Waters).
+    this.controlsVisible          = false;
+    this.placementControlsVisible = false;
 
     // Board layout flip. Convenience only. False is the default
     // layout (Your left/top, Enemy right/bottom). True swaps them.
@@ -760,7 +761,7 @@ export class Battleship extends App {
   }
 
   // Build the two frame composites, the two content layers, the
-  // Flip button, and (mobile) the D-pad. The frames are positioned
+  // Flip button, and (mobile) the D-pads. The frames are positioned
   // by _layoutBoards so flip is a reposition of existing nodes.
   _buildBoardsDesktop(screen) {
     const W = Viewport.width;
@@ -795,12 +796,13 @@ export class Battleship extends App {
     screen.add(this.opLayer);
 
     // Flip button. Small. Sits in the existing gap, vertically
-    // centered on the boards. No board repositioning.
+    // centered on the boards. No board repositioning. Uses the same
+    // blue palette as Update and Chat.
     this.flipBtn = new Button({
       x: 0, y: 0, w: 64, h: 36,
       text: "Flip",
-      fill: BTN_DARK_FILL,
-      stroke: BTN_DARK_STROKE,
+      fill: BTN_BLUE_FILL,
+      stroke: BTN_BLUE_STROKE,
       strokeWidth: 1,
       radius: 6,
       textOptions: { font: "bold 14px sans-serif", color: "#ffffff" },
@@ -855,12 +857,13 @@ export class Battleship extends App {
     screen.add(this.myLayer);
     screen.add(this.opLayer);
 
-    // Flip button, centered in the existing gap.
+    // Flip button, centered in the existing gap. Same blue palette
+    // as Update and Chat.
     this.flipBtn = new Button({
       x: 0, y: 0, w: 120, h: 40,
       text: "Flip",
-      fill: BTN_DARK_FILL,
-      stroke: BTN_DARK_STROKE,
+      fill: BTN_BLUE_FILL,
+      stroke: BTN_BLUE_STROKE,
       strokeWidth: 2,
       radius: 6,
       textOptions: { font: "bold 18px sans-serif", color: "#ffffff" },
@@ -872,8 +875,8 @@ export class Battleship extends App {
     this.actionRowY = 0;
     this._buildActionRow(screen, 0);
 
-    // Show Controls toggle: below the action row. Positioned by
-    // _layoutBoards.
+    // Fire-phase Show Controls toggle: below the action row.
+    // Overlays Your Waters. Positioned by _layoutBoards.
     this.controlsToggle = new Button({
       x: W / 2 - 160, y: 0, w: 320, h: 52,
       text: "Show Controls",
@@ -887,18 +890,33 @@ export class Battleship extends App {
     this.controlsToggle.visible = false;
     screen.add(this.controlsToggle);
 
-    // D-pad. Buttons start hidden. Positioned by _layoutDpad so
-    // they follow Your Waters when the boards are flipped.
+    // Placement-phase Show Controls toggle. Overlays Enemy Waters.
+    // Positioned by _layoutBoards.
+    this.placementControlsToggle = new Button({
+      x: W / 2 - 160, y: 0, w: 320, h: 52,
+      text: "Show Controls",
+      fill: BTN_DARK_FILL,
+      stroke: BTN_DARK_STROKE,
+      strokeWidth: 2,
+      radius: 8,
+      textOptions: { font: "bold 20px sans-serif", color: "#ffffff" },
+      onClick: () => this._togglePlacementControls(),
+    });
+    this.placementControlsToggle.visible = false;
+    screen.add(this.placementControlsToggle);
+
+    // Fire-phase D-pad. Buttons start hidden. Positioned by
+    // _layoutDpad so they follow Your Waters when the boards flip.
     this.dpadButtons = [];
 
-    const defs = [
+    const fireDefs = [
       { text: "^", dir: "up"    },
       { text: "v", dir: "down"  },
       { text: "<", dir: "left"  },
       { text: ">", dir: "right" },
     ];
 
-    for (const d of defs) {
+    for (const d of fireDefs) {
       const b = new Button({
         x: 0, y: 0, w: 84, h: 84,
         text: d.text,
@@ -915,11 +933,32 @@ export class Battleship extends App {
       this.dpadButtons.push(b);
     }
 
+    // Placement-phase D-pad. Overlays Enemy Waters. Buttons start
+    // hidden. Positioned by _layoutPlacementDpad.
+    this.placementDpadButtons = [];
+
+    for (const d of fireDefs) {
+      const b = new Button({
+        x: 0, y: 0, w: 84, h: 84,
+        text: d.text,
+        fill: BTN_DARK_FILL,
+        stroke: BTN_DARK_STROKE,
+        strokeWidth: 2,
+        radius: 8,
+        textOptions: { font: "bold 32px sans-serif", color: "#ffffff" },
+        onClick: () => this._nudgePlaceCursor(d.dir),
+      });
+      b.visible = false;
+      b._dir = d.dir;
+      screen.add(b);
+      this.placementDpadButtons.push(b);
+    }
+
     this._layoutBoards();
   }
 
   // Position the frame composites, content layers, Flip button, and
-  // (mobile) the action row, controls toggle, and D-pad from the
+  // (mobile) the action row, controls toggles, and D-pads from the
   // current this.flipped state. Called at build and again on flip.
   // This is the only place board anchors are computed.
   _layoutBoards() {
@@ -958,10 +997,7 @@ export class Battleship extends App {
       this.opLayer.x = this._opBx;
       this.opLayer.y = this._opBy;
 
-      // Flip button: centered in the gap between the boards. The
-      // lower board starts at max(myBy, opBy); the upper board ends
-      // at min(myBy, opBy) + boardPx. The gap between them holds the
-      // button.
+      // Flip button: centered in the gap between the boards.
       const upperBottom = Math.min(this._myBy, this._opBy) + boardPx;
       const gapCenter   = upperBottom + gap / 2;
       this.flipBtn.x = W / 2 - this.flipBtn.w / 2;
@@ -972,9 +1008,19 @@ export class Battleship extends App {
       const actionY = lowerBottom + 20;
       this.actionRowY = actionY;
       this._positionActionRow(actionY);
+
+      // Fire-phase controls toggle, below the action row.
+      this.controlsToggle.x = W / 2 - this.controlsToggle.w / 2;
       this.controlsToggle.y = actionY + 64;
 
+      // Placement-phase controls toggle, centered vertically over
+      // Enemy Waters. Sits over the enemy board so the placement
+      // D-pad, when revealed, is out of the way of Your Waters.
+      this.placementControlsToggle.x = W / 2 - this.placementControlsToggle.w / 2;
+      this.placementControlsToggle.y = this._opBy + boardPx - this.placementControlsToggle.h - 12;
+
       this._layoutDpad();
+      this._layoutPlacementDpad();
     } else {
       const W = Viewport.width;
 
@@ -1014,8 +1060,7 @@ export class Battleship extends App {
     }
   }
 
-  // Position the mobile D-pad over Your Waters, centered on
-  // whatever board that currently occupies.
+  // Position the mobile fire-phase D-pad over Your Waters.
   _layoutDpad() {
     if (!this.mobile) return;
     if (!this.dpadButtons || this.dpadButtons.length === 0) return;
@@ -1036,6 +1081,36 @@ export class Battleship extends App {
     };
 
     for (const b of this.dpadButtons) {
+      const p = positions[b._dir];
+      if (!p) continue;
+      b.x = p.x;
+      b.y = p.y;
+      b.w = btnSize;
+      b.h = btnSize;
+    }
+  }
+
+  // Position the mobile placement-phase D-pad over Enemy Waters.
+  _layoutPlacementDpad() {
+    if (!this.mobile) return;
+    if (!this.placementDpadButtons || this.placementDpadButtons.length === 0) return;
+
+    const boardPx = this._boardPx;
+    const W       = Viewport.width;
+
+    const dpadCx  = W / 2;
+    const btnSize = 84;
+    const gap     = 10;
+    const centerY = this._opBy + boardPx / 2;
+
+    const positions = {
+      up:    { x: dpadCx - btnSize / 2, y: centerY - btnSize - gap / 2 },
+      down:  { x: dpadCx - btnSize / 2, y: centerY + gap / 2 },
+      left:  { x: dpadCx - btnSize - gap / 2 - btnSize / 2, y: centerY - btnSize / 2 },
+      right: { x: dpadCx + gap / 2 + btnSize / 2, y: centerY - btnSize / 2 },
+    };
+
+    for (const b of this.placementDpadButtons) {
       const p = positions[b._dir];
       if (!p) continue;
       b.x = p.x;
@@ -1076,8 +1151,8 @@ export class Battleship extends App {
 
   // Build one board's frame contents into a composite. The
   // composite origin is the board's top-left. Label is drawn above
-  // at negative y in local space. The backing panel is the ocean;
-  // the grid lines are a lighter blue on top.
+  // at negative y in local space. The interior is ocean blue with a
+  // black border; grid lines are a lighter blue on top.
   _drawBoardFrame(composite, boardPx, cell, label, labelColor) {
     composite.add(new Text({
       x: 0, y: -28,
@@ -1088,19 +1163,15 @@ export class Battleship extends App {
       baseline: "middle",
     }));
 
-    composite.add(new Panel({
-      x: -2, y: -2,
-      w: boardPx + 4, h: boardPx + 4,
-      fill: OCEAN_FRAME,
-      stroke: OCEAN_GRID,
-      strokeWidth: 2,
-    }));
-
+    // Ocean interior with black border. Drawn as a single filled
+    // rect with a black stroke.
     composite.add(new Panel({
       x: 0, y: 0,
       w: boardPx, h: boardPx,
       fill: OCEAN_FILL,
-      stroke: null,
+      stroke: OCEAN_BORDER,
+      strokeWidth: 3,
+      radius: 0,
     }));
 
     for (let i = 0; i <= BOARD_W; i++) {
@@ -1477,7 +1548,7 @@ export class Battleship extends App {
 
   // Toggle the board layout. Convenience only. Swaps the four
   // anchor constants, repositions the frame composites, content
-  // layers, Flip button, action row, controls toggle, and D-pad.
+  // layers, Flip button, action row, controls toggles, and D-pads.
   // Game logic is untouched.
   _applyFlip() {
     this.flipped = !this.flipped;
@@ -2332,6 +2403,7 @@ export class Battleship extends App {
       this.myRematch = false;
       this.chatOpen = false;
       this.controlsVisible = false;
+      this.placementControlsVisible = false;
       this.flipped = false;
       if (this.chatPanel) this.chatPanel.visible = false;
       if (this.chatKeyboard) this.chatKeyboard.visible = false;
@@ -3177,6 +3249,22 @@ export class Battleship extends App {
     this._renderAll();
   }
 
+  // Move the current placement preview one cell in a direction.
+  // Mobile placement D-pad and (in the mobile placement paths)
+  // keyboard arrows both route through this.
+  _nudgePlaceCursor(dir) {
+    if (!this.placing) return;
+    if (this.placeIdx >= FLEET.length) return;
+    if (!this._placePreview) return;
+
+    const c = this._placePreview;
+    if (dir === "up")    c.y = Math.max(0, c.y - 1);
+    if (dir === "down")  c.y = Math.min(BOARD_H - 1, c.y + 1);
+    if (dir === "left")  c.x = Math.max(0, c.x - 1);
+    if (dir === "right") c.x = Math.min(BOARD_W - 1, c.x + 1);
+    this._renderAll();
+  }
+
   _allShipsPlaced() {
     if (!this.myFleet) return false;
     return this.myFleet.length === FLEET.length;
@@ -3194,7 +3282,7 @@ export class Battleship extends App {
     if (this._placingWrite) return;
     this._placingWrite = true;
     this._setStatus("Locking in...");
-    this._busyStart(this.lockBtn);
+    this._renderAll();
 
     const mySlot = this.slot;
     const myFleet = this.myFleet;
@@ -3243,7 +3331,7 @@ export class Battleship extends App {
       this._handleApiError(e, "lock in");
     } finally {
       this._placingWrite = false;
-      this._busyEnd(this.lockBtn);
+      this._renderAll();
     }
   }
 
@@ -3676,7 +3764,7 @@ export class Battleship extends App {
             y: c.y * cell + 1,
             w: cell - 2,
             h: cell - 2,
-            fill: sunk ? COLOR_MY_SUNK : COLOR_MY_SHIP,
+            fill: sunk ? COLOR_MY_SUNK : COLOR_SHIP,
             stroke: null,
           }));
         }
@@ -3911,17 +3999,30 @@ export class Battleship extends App {
     this.placeBtn.visible = !!placeEntry;
 
     const allPlaced = this._allShipsPlaced();
+    const placingWrite = this._placingWrite;
 
     if (this.mobile) {
       if (placeCtl) {
         this.lockBtn.visible = true;
-        if (allPlaced) {
+        if (placingWrite) {
+          this.lockBtn.setText("Lock In");
+          this.lockBtn.setBaseStyle({ fill: BUSY_FILL, stroke: BUSY_STROKE });
+          this.rotateBtn.visible = true;
+          this.rotateBtn.setText("Rotate");
+          this.rotateBtn.setBaseStyle({ fill: BUSY_FILL, stroke: BUSY_STROKE });
+          this.nextBtn.visible = true;
+          this.nextBtn.setText("Next");
+          this.nextBtn.setBaseStyle({ fill: BUSY_FILL, stroke: BUSY_STROKE });
+          this.resetBtn.visible = true;
+          this.resetBtn.setBaseStyle({ fill: BUSY_FILL, stroke: BUSY_STROKE });
+        } else if (allPlaced) {
           this.lockBtn.setText("Lock In");
           this.lockBtn.setBaseStyle({ fill: BTN_GREEN_FILL, stroke: BTN_GREEN_STROKE });
 
           this.rotateBtn.visible = false;
           this.nextBtn.visible   = false;
           this.resetBtn.visible  = true;
+          this.resetBtn.setBaseStyle({ fill: BTN_DARK_FILL, stroke: BTN_DARK_STROKE });
         } else {
           this.lockBtn.setText("Lock In");
           this.lockBtn.setBaseStyle({ fill: BUSY_FILL, stroke: BUSY_STROKE });
@@ -3963,7 +4064,11 @@ export class Battleship extends App {
         || (gameStarted && this._iHaveLockedIn() && !this._bothFleetsIn());
       this.lockBtn.visible = showLock;
 
-      if (showLock) {
+      if (placingWrite) {
+        this.lockBtn.setBaseStyle({ fill: BUSY_FILL, stroke: BUSY_STROKE });
+        this.rotateBtn.setBaseStyle({ fill: BUSY_FILL, stroke: BUSY_STROKE });
+        this.resetBtn.setBaseStyle({ fill: BUSY_FILL, stroke: BUSY_STROKE });
+      } else if (showLock) {
         const locked = this._iHaveLockedIn();
         if (locked) {
           this.lockBtn.setText("Locked In!");
@@ -3976,14 +4081,14 @@ export class Battleship extends App {
             this.lockBtn.setBaseStyle({ fill: BUSY_FILL, stroke: BUSY_STROKE });
           }
         }
-      }
 
-      if (this.rotateBtn.visible) {
-        this.rotateBtn.setText("Rotate (R)");
-        this.rotateBtn.setBaseStyle({ fill: BTN_DARK_FILL, stroke: BTN_DARK_STROKE });
-      }
-      if (this.resetBtn.visible) {
-        this.resetBtn.setBaseStyle({ fill: BTN_DARK_FILL, stroke: BTN_DARK_STROKE });
+        if (this.rotateBtn.visible) {
+          this.rotateBtn.setText("Rotate (R)");
+          this.rotateBtn.setBaseStyle({ fill: BTN_DARK_FILL, stroke: BTN_DARK_STROKE });
+        }
+        if (this.resetBtn.visible) {
+          this.resetBtn.setBaseStyle({ fill: BTN_DARK_FILL, stroke: BTN_DARK_STROKE });
+        }
       }
     }
 
@@ -4000,6 +4105,20 @@ export class Battleship extends App {
       }
       for (const b of this.dpadButtons) {
         b.visible = !!firePhase && this.controlsVisible;
+      }
+
+      if (this.placementControlsToggle) {
+        if (placeCtl) {
+          this.placementControlsToggle.visible = true;
+          this.placementControlsToggle.setText(
+            this.placementControlsVisible ? "Hide Controls" : "Show Controls"
+          );
+        } else {
+          this.placementControlsToggle.visible = false;
+        }
+      }
+      for (const b of this.placementDpadButtons) {
+        b.visible = !!placeCtl && this.placementControlsVisible;
       }
     }
   }
@@ -4137,27 +4256,39 @@ export class Battleship extends App {
     if (this.placing) {
       if (k === "r" || k === "R") { this._rotatePlace(); return; }
       if (k === "ArrowLeft" || k === "a" || k === "A") {
-        if (this.mobile && this._placePreview) this._placePreview.x = Math.max(0, this._placePreview.x - 1);
-        else this.hoverCell.x = Math.max(0, this.hoverCell.x - 1);
-        this._renderAll();
+        if (this.mobile && this._placePreview) {
+          this._nudgePlaceCursor("left");
+        } else {
+          this.hoverCell.x = Math.max(0, this.hoverCell.x - 1);
+          this._renderAll();
+        }
         return;
       }
       if (k === "ArrowRight" || k === "d" || k === "D") {
-        if (this.mobile && this._placePreview) this._placePreview.x = Math.min(BOARD_W - 1, this._placePreview.x + 1);
-        else this.hoverCell.x = Math.min(BOARD_W - 1, this.hoverCell.x + 1);
-        this._renderAll();
+        if (this.mobile && this._placePreview) {
+          this._nudgePlaceCursor("right");
+        } else {
+          this.hoverCell.x = Math.min(BOARD_W - 1, this.hoverCell.x + 1);
+          this._renderAll();
+        }
         return;
       }
       if (k === "ArrowUp" || k === "w" || k === "W") {
-        if (this.mobile && this._placePreview) this._placePreview.y = Math.max(0, this._placePreview.y - 1);
-        else this.hoverCell.y = Math.max(0, this.hoverCell.y - 1);
-        this._renderAll();
+        if (this.mobile && this._placePreview) {
+          this._nudgePlaceCursor("up");
+        } else {
+          this.hoverCell.y = Math.max(0, this.hoverCell.y - 1);
+          this._renderAll();
+        }
         return;
       }
       if (k === "ArrowDown" || k === "s" || k === "S") {
-        if (this.mobile && this._placePreview) this._placePreview.y = Math.min(BOARD_H - 1, this._placePreview.y + 1);
-        else this.hoverCell.y = Math.min(BOARD_H - 1, this.hoverCell.y + 1);
-        this._renderAll();
+        if (this.mobile && this._placePreview) {
+          this._nudgePlaceCursor("down");
+        } else {
+          this.hoverCell.y = Math.min(BOARD_H - 1, this.hoverCell.y + 1);
+          this._renderAll();
+        }
         return;
       }
       if (k === "Enter") {
@@ -4309,6 +4440,11 @@ export class Battleship extends App {
 
   _toggleControls() {
     this.controlsVisible = !this.controlsVisible;
+    this._renderAll();
+  }
+
+  _togglePlacementControls() {
+    this.placementControlsVisible = !this.placementControlsVisible;
     this._renderAll();
   }
 
