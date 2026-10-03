@@ -105,12 +105,12 @@
 // positioned. A Panel would paint its default self shape over the
 // ocean; a bare Composite paints nothing.
 //
-// Mobile controls: two Show Controls surfaces, at the same screen
-// position (below the action row). Whichever phase is active shows
-// its own toggle there: firing reveals a D-pad over Your Waters,
-// placement reveals a D-pad over Enemy Waters. They have separate
-// visibility flags and are never visible at the same time
-// (placement and firing are mutually exclusive game phases).
+// Button color convention: blue is the default button look (Flip,
+// Rotate, Reset, Show Controls, Hide, Return, Update, Chat, room
+// list, Enter). Green and red are reserved for state or emphasis
+// (Lock In, Fire!, Ready, Next, Rematch, Leave, Exit). The D-pad
+// arrow buttons are the only place BTN_DARK_* is still used, since
+// they sit over the blue ocean and grey reads better against it.
 //
 // Shared-file trust model: both players read and write the same
 // game.txt. There is no attempt to hide fleet positions from the
@@ -233,6 +233,10 @@ const BUSY_STROKE = "#a8a8a8";
 // state (vote, ready/unready, lock in, fire, rematch). Applied via
 // setBaseStyle so hover and press merge over the CURRENT resting
 // color instead of a stale snapshot from construction time.
+//
+// Blue is the default button look. Green and red are reserved for
+// state or emphasis. BTN_DARK_* is used only by the mobile D-pad
+// arrow buttons, which sit over the blue ocean.
 
 const BTN_BLUE_FILL    = "#2a4a80";
 const BTN_BLUE_STROKE  = "#4a9aff";
@@ -808,8 +812,8 @@ export class Battleship extends App {
     screen.add(this.opLayer);
 
     // Flip button. Small. Sits in the existing gap, vertically
-    // centered on the boards. No board repositioning. Uses the same
-    // blue palette as Update and Chat.
+    // centered on the boards. No board repositioning. Uses the
+    // default blue palette.
     this.flipBtn = new Button({
       x: 0, y: 0, w: 64, h: 36,
       text: "Flip",
@@ -869,8 +873,7 @@ export class Battleship extends App {
     screen.add(this.myLayer);
     screen.add(this.opLayer);
 
-    // Flip button, centered in the existing gap. Same blue palette
-    // as Update and Chat.
+    // Flip button, centered in the existing gap. Default blue.
     this.flipBtn = new Button({
       x: 0, y: 0, w: 120, h: 40,
       text: "Flip",
@@ -893,8 +896,8 @@ export class Battleship extends App {
     this.controlsToggle = new Button({
       x: W / 2 - 160, y: 0, w: 320, h: 52,
       text: "Show Controls",
-      fill: BTN_DARK_FILL,
-      stroke: BTN_DARK_STROKE,
+      fill: BTN_BLUE_FILL,
+      stroke: BTN_BLUE_STROKE,
       strokeWidth: 2,
       radius: 8,
       textOptions: { font: "bold 20px sans-serif", color: "#ffffff" },
@@ -909,8 +912,8 @@ export class Battleship extends App {
     this.placementControlsToggle = new Button({
       x: W / 2 - 160, y: 0, w: 320, h: 52,
       text: "Show Controls",
-      fill: BTN_DARK_FILL,
-      stroke: BTN_DARK_STROKE,
+      fill: BTN_BLUE_FILL,
+      stroke: BTN_BLUE_STROKE,
       strokeWidth: 2,
       radius: 8,
       textOptions: { font: "bold 20px sans-serif", color: "#ffffff" },
@@ -921,6 +924,8 @@ export class Battleship extends App {
 
     // Fire-phase D-pad. Buttons start hidden. Positioned by
     // _layoutDpad so they follow Your Waters when the boards flip.
+    // These buttons use BTN_DARK_* because they sit directly over
+    // the blue ocean and grey reads better against it.
     this.dpadButtons = [];
 
     const fireDefs = [
@@ -948,7 +953,8 @@ export class Battleship extends App {
     }
 
     // Placement-phase D-pad. Overlays Enemy Waters. Buttons start
-    // hidden. Positioned by _layoutPlacementDpad.
+    // hidden. Positioned by _layoutPlacementDpad. BTN_DARK_* for
+    // the same contrast reason as the fire D-pad.
     this.placementDpadButtons = [];
 
     for (const d of fireDefs) {
@@ -1263,8 +1269,8 @@ export class Battleship extends App {
     this.endExitBtn = new Button({
       x: (panelW - totalW) / 2 + btnW + gap, y: btnY, w: btnW, h: btnH,
       text: "Exit",
-      fill: BTN_DARK_FILL,
-      stroke: BTN_DARK_STROKE,
+      fill: BTN_RED_FILL,
+      stroke: BTN_RED_STROKE,
       strokeWidth: 2,
       radius: 8,
       textOptions: {
@@ -1279,6 +1285,10 @@ export class Battleship extends App {
   // Apply the current this.myRematch and this._rematchWrite flags to
   // the end-panel button styles. Called from _renderAll and after
   // every rematch toggle.
+  //
+  // Not rematched: Rematch green, Exit red (destructive, like
+  // Leave). Rematched: Rematch red labelled Cancel, Exit greyed.
+  // Any rematch write in flight: both grey.
   _renderEndPanelButtons() {
     if (!this.rematchBtn || !this.endExitBtn) return;
 
@@ -1295,7 +1305,7 @@ export class Battleship extends App {
     } else {
       this.rematchBtn.setText("Rematch");
       this.rematchBtn.setBaseStyle({ fill: BTN_GREEN_FILL, stroke: BTN_GREEN_STROKE });
-      this.endExitBtn.setBaseStyle({ fill: BTN_DARK_FILL, stroke: BTN_DARK_STROKE });
+      this.endExitBtn.setBaseStyle({ fill: BTN_RED_FILL, stroke: BTN_RED_STROKE });
     }
   }
 
@@ -1389,8 +1399,8 @@ export class Battleship extends App {
       this.rotateBtn = new Button({
         x: 260, y: actionY, w: 200, h: 56,
         text: "Rotate",
-        fill: BTN_DARK_FILL,
-        stroke: BTN_DARK_STROKE,
+        fill: BTN_BLUE_FILL,
+        stroke: BTN_BLUE_STROKE,
         strokeWidth: 2,
         radius: 8,
         textOptions: { font: "bold 20px sans-serif", color: "#ffffff" },
@@ -1415,8 +1425,8 @@ export class Battleship extends App {
       this.resetBtn = new Button({
         x: 260, y: actionY, w: 200, h: 56,
         text: "Reset",
-        fill: BTN_DARK_FILL,
-        stroke: BTN_DARK_STROKE,
+        fill: BTN_BLUE_FILL,
+        stroke: BTN_BLUE_STROKE,
         strokeWidth: 2,
         radius: 8,
         textOptions: { font: "bold 20px sans-serif", color: "#ffffff" },
@@ -1493,8 +1503,8 @@ export class Battleship extends App {
       this.rotateBtn = new Button({
         x: W / 2 - 120, y: actionY, w: 240, h: 52,
         text: "Rotate (R)",
-        fill: BTN_DARK_FILL,
-        stroke: BTN_DARK_STROKE,
+        fill: BTN_BLUE_FILL,
+        stroke: BTN_BLUE_STROKE,
         strokeWidth: 2,
         radius: 8,
         textOptions: { font: "bold 18px sans-serif", color: "#ffffff" },
@@ -1506,8 +1516,8 @@ export class Battleship extends App {
       this.resetBtn = new Button({
         x: W / 2 + 140, y: actionY, w: 200, h: 52,
         text: "Reset",
-        fill: BTN_DARK_FILL,
-        stroke: BTN_DARK_STROKE,
+        fill: BTN_BLUE_FILL,
+        stroke: BTN_BLUE_STROKE,
         strokeWidth: 2,
         radius: 8,
         textOptions: { font: "bold 18px sans-serif", color: "#ffffff" },
@@ -1594,12 +1604,12 @@ export class Battleship extends App {
       }));
 
       // Hide button, top-right. Above the log so it is never covered
-      // by the keyboard. Toggles chat closed.
+      // by the keyboard. Toggles chat closed. Default blue.
       panel.add(new Button({
         x: W - 140, y: 12, w: 120, h: 44,
         text: "Hide",
-        fill: BTN_DARK_FILL,
-        stroke: BTN_DARK_STROKE,
+        fill: BTN_BLUE_FILL,
+        stroke: BTN_BLUE_STROKE,
         strokeWidth: 2,
         radius: 8,
         textOptions: { font: "bold 18px sans-serif", color: "#ffffff" },
@@ -1713,11 +1723,12 @@ export class Battleship extends App {
         baseline: "top",
       }));
 
+      // Hide button, small, top-right of the panel. Default blue.
       panel.add(new Button({
         x: pw - 84, y: 6, w: 72, h: 26,
         text: "Hide",
-        fill: BTN_DARK_FILL,
-        stroke: BTN_DARK_STROKE,
+        fill: BTN_BLUE_FILL,
+        stroke: BTN_BLUE_STROKE,
         strokeWidth: 1,
         radius: 4,
         textOptions: { font: "bold 12px sans-serif", color: "#ffffff" },
@@ -2639,7 +2650,7 @@ export class Battleship extends App {
         let resolvedGame = null;
 
         try {
-          const result = await this._writeWithRetry(
+          const result = await self._writeWithRetry(
             gamePath,
             (currentContent) => {
               const g = self._decodeGame(currentContent);
@@ -4034,14 +4045,14 @@ export class Battleship extends App {
           this.rotateBtn.visible = false;
           this.nextBtn.visible   = false;
           this.resetBtn.visible  = true;
-          this.resetBtn.setBaseStyle({ fill: BTN_DARK_FILL, stroke: BTN_DARK_STROKE });
+          this.resetBtn.setBaseStyle({ fill: BTN_BLUE_FILL, stroke: BTN_BLUE_STROKE });
         } else {
           this.lockBtn.setText("Lock In");
           this.lockBtn.setBaseStyle({ fill: BUSY_FILL, stroke: BUSY_STROKE });
 
           this.rotateBtn.visible = true;
           this.rotateBtn.setText("Rotate");
-          this.rotateBtn.setBaseStyle({ fill: BTN_DARK_FILL, stroke: BTN_DARK_STROKE });
+          this.rotateBtn.setBaseStyle({ fill: BTN_BLUE_FILL, stroke: BTN_BLUE_STROKE });
 
           const previewValid = this._previewIsValid();
 
@@ -4096,10 +4107,10 @@ export class Battleship extends App {
 
         if (this.rotateBtn.visible) {
           this.rotateBtn.setText("Rotate (R)");
-          this.rotateBtn.setBaseStyle({ fill: BTN_DARK_FILL, stroke: BTN_DARK_STROKE });
+          this.rotateBtn.setBaseStyle({ fill: BTN_BLUE_FILL, stroke: BTN_BLUE_STROKE });
         }
         if (this.resetBtn.visible) {
-          this.resetBtn.setBaseStyle({ fill: BTN_DARK_FILL, stroke: BTN_DARK_STROKE });
+          this.resetBtn.setBaseStyle({ fill: BTN_BLUE_FILL, stroke: BTN_BLUE_STROKE });
         }
       }
     }
