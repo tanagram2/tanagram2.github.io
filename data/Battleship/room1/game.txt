@@ -1,7 +1,7 @@
 #META
 started=1
-turn=1
-turnCount=1
+turn=0
+turnCount=2
 winner=-1
 firstMode=p2
 voteP0=
@@ -17,4 +17,4 @@ shots=
 #PLAYER 1
 name=NOP
 fleet=0,0:1,0:2,0:3,0:4,0;1,4:2,4:3,4:4,4;6,7:7,7:8,7;0,8:1,8:2,8;7,2:8,2
-shots=1,1,1
+shots=1,1,1|9,9,0
