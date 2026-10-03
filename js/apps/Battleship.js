@@ -174,40 +174,70 @@ const FLEET = [
 const BOARD_W = 10;
 const BOARD_H = 10;
 
-// Board cell colors. Hits and sunk ships share the same palette.
-// Green is good (you hit the enemy), red is bad (your ships took a
-// hit). A sunk ship uses a darker shade of the same color.
+// ---- Color palette ----
+//
+// Mid grey chrome, blue ocean, bright accent colors. Higher hex
+// values than the earlier pass so the app reads with more contrast
+// against the grey background. Board interiors are blue (ocean);
+// the chrome around them is grey.
 
-const COLOR_MY_SHIP       = "#3a5878";
-const COLOR_MY_HIT        = "#c04040";
-const COLOR_MY_SUNK       = "#4a0e0e";
-const COLOR_OP_HIT        = "#40c060";
-const COLOR_OP_SUNK       = "#0a4018";
-const COLOR_MISS          = "#404850";
+// Screen chrome.
+const BG_SCREEN   = "#2b3038";   // all three screen fills
+const BG_INSET    = "#3a4048";   // username field, chat input panel
+const BG_PANEL    = "#242830";   // end-game panel box, chat overlay box
+const BG_CHAT     = "#242a33";   // chat panel / overlay background
 
-// Busy-button colors. The helper swaps the self shape's fill and
-// stroke to the busy pair while a git request is in flight, and
-// locks the Button's own hover/press styling so a pointer wandering
-// over the button cannot undo the busy look. On completion the
-// Button re-applies its CURRENT base style, which is kept fresh by
-// _renderButtons via setBaseStyle.
+const STROKE_INSET = "#5a6570";  // username field, chat input strokes
+const STROKE_PANEL = "#6a7a8a";  // panel / box strokes
 
-const BUSY_FILL   = "#4a4a4a";
-const BUSY_STROKE = "#9a9a9a";
+// Ocean (board interiors).
+const OCEAN_FILL   = "#153a5a";  // board backing panel fill
+const OCEAN_GRID   = "#3a6a90";  // board grid lines
+const OCEAN_FRAME  = "#0a1e30";  // board outer frame stroke
+
+// Board cell colors. Green is good (you hit the enemy), red is bad
+// (your ships took a hit). A sunk ship uses a darker shade of the
+// same color.
+const COLOR_MY_SHIP       = "#4a7aa8";
+const COLOR_MY_HIT        = "#e03030";
+const COLOR_MY_SUNK       = "#5a0a0a";
+const COLOR_OP_HIT        = "#30d060";
+const COLOR_OP_SUNK       = "#083a10";
+const COLOR_MISS          = "#5a6070";
+const COLOR_PLACE_OK      = "#30c060";
+const COLOR_PLACE_BAD     = "#d04040";
+const COLOR_FIRE_CURSOR   = "#ffcc33";
+
+// Text.
+const TEXT_PRIMARY   = "#eef2f8";
+const TEXT_SECONDARY = "#b8c8e0";
+const TEXT_DIM       = "#8a9ab0";
+const TEXT_TURN      = "#70aaff";
+const TEXT_FEEDBACK  = "#ffcc33";
+const TEXT_HINT      = "#8090a0";
+const TEXT_LABEL_MY  = "#6ac8ff";
+const TEXT_LABEL_OP  = "#ff8080";
+const TEXT_CHAT      = "#e0e8f0";
+const TEXT_ERROR     = "#ff6060";
+const TEXT_BADGE     = "#ff4040";
+
+// Busy-button colors. Used while a git request is in flight.
+const BUSY_FILL   = "#5a5a5a";
+const BUSY_STROKE = "#a8a8a8";
 
 // Named resting colors for buttons whose base color changes with
 // state (vote, ready/unready, lock in, fire, rematch). Applied via
 // setBaseStyle so hover and press merge over the CURRENT resting
 // color instead of a stale snapshot from construction time.
 
-const BTN_BLUE_FILL    = "#2a3552";
-const BTN_BLUE_STROKE  = "#6a86b8";
-const BTN_GREEN_FILL   = "#2a6a3a";
-const BTN_GREEN_STROKE = "#6aaa7a";
-const BTN_RED_FILL     = "#8a2020";
-const BTN_RED_STROKE   = "#e06060";
-const BTN_DARK_FILL    = "#2a2a3a";
-const BTN_DARK_STROKE  = "#5a5a7a";
+const BTN_BLUE_FILL    = "#2a4a80";
+const BTN_BLUE_STROKE  = "#4a9aff";
+const BTN_GREEN_FILL   = "#1f8a3f";
+const BTN_GREEN_STROKE = "#4fd97a";
+const BTN_RED_FILL     = "#c02020";
+const BTN_RED_STROKE   = "#ff5050";
+const BTN_DARK_FILL    = "#333a45";
+const BTN_DARK_STROKE  = "#8a8aa8";
 
 // base64 helpers. The browser's btoa/atob mishandle non-ASCII.
 
@@ -413,15 +443,15 @@ export class Battleship extends App {
 
     const screen = new Panel({
       x: 0, y: 0, w: "100%", h: "100%",
-      fill: "#101820",
+      fill: BG_SCREEN,
       stroke: null,
     });
 
     screen.add(new Button({
       x: 24, y: 24, w: 140, h: 48,
       text: "Return",
-      fill: "#2a2a3a",
-      stroke: "#5a5a7a",
+      fill: BTN_DARK_FILL,
+      stroke: BTN_DARK_STROKE,
       strokeWidth: 2,
       radius: 8,
       textOptions: { font: "bold 18px sans-serif", color: "#ffffff" },
@@ -435,7 +465,7 @@ export class Battleship extends App {
       x: cx, y: titleY,
       text: "Battleship - Username:",
       font: this.mobile ? "bold 40px sans-serif" : "bold 36px sans-serif",
-      color: "#d8e4f7",
+      color: TEXT_PRIMARY,
       align: "center",
       baseline: "middle",
     }));
@@ -447,8 +477,8 @@ export class Battleship extends App {
 
     const field = new Panel({
       x: fieldX, y: fieldY, w: fieldW, h: fieldH,
-      fill: "#0a1018",
-      stroke: "#3a4d70",
+      fill: BG_INSET,
+      stroke: STROKE_INSET,
       strokeWidth: 2,
       radius: 6,
     });
@@ -459,7 +489,7 @@ export class Battleship extends App {
       text: "",
       textOptions: {
         font: this.mobile ? "22px monospace" : "18px monospace",
-        color: "#d8e4f7",
+        color: TEXT_PRIMARY,
         align: "left",
         baseline: "middle",
       },
@@ -472,7 +502,7 @@ export class Battleship extends App {
       x: cx, y: fieldY + fieldH + 24,
       text: "",
       font: "16px monospace",
-      color: "#e06060",
+      color: TEXT_ERROR,
       align: "center",
       baseline: "middle",
     });
@@ -500,8 +530,8 @@ export class Battleship extends App {
       screen.add(new Button({
         x: btnX, y: btnY, w: btnW, h: btnH,
         text: "Enter",
-        fill: "#2a3552",
-        stroke: "#6a86b8",
+        fill: BTN_BLUE_FILL,
+        stroke: BTN_BLUE_STROKE,
         strokeWidth: 2,
         radius: 8,
         textOptions: { font: "bold 26px sans-serif", color: "#ffffff" },
@@ -514,8 +544,8 @@ export class Battleship extends App {
         x: cx - 110, y: fieldY + fieldH + 70,
         w: 220, h: 56,
         text: "Enter",
-        fill: "#2a3552",
-        stroke: "#6a86b8",
+        fill: BTN_BLUE_FILL,
+        stroke: BTN_BLUE_STROKE,
         strokeWidth: 2,
         radius: 8,
         textOptions: { font: "bold 20px sans-serif", color: "#ffffff" },
@@ -531,15 +561,15 @@ export class Battleship extends App {
 
     const screen = new Panel({
       x: 0, y: 0, w: "100%", h: "100%",
-      fill: "#101820",
+      fill: BG_SCREEN,
       stroke: null,
     });
 
     screen.add(new Button({
       x: 24, y: 24, w: 140, h: 48,
       text: "Return",
-      fill: "#2a2a3a",
-      stroke: "#5a5a7a",
+      fill: BTN_DARK_FILL,
+      stroke: BTN_DARK_STROKE,
       strokeWidth: 2,
       radius: 8,
       textOptions: { font: "bold 18px sans-serif", color: "#ffffff" },
@@ -552,7 +582,7 @@ export class Battleship extends App {
       x: cx, y: this.mobile ? 140 : 160,
       text: "Select a Room:",
       font: this.mobile ? "bold 40px sans-serif" : "bold 36px sans-serif",
-      color: "#d8e4f7",
+      color: TEXT_PRIMARY,
       align: "center",
       baseline: "middle",
     }));
@@ -569,13 +599,13 @@ export class Battleship extends App {
         x: cx - btnW / 2, y,
         w: btnW, h: btnH,
         text: ROOM_LABELS[roomName] + "  ?/2",
-        fill: "#1a2434",
-        stroke: "#3a4d70",
+        fill: BTN_BLUE_FILL,
+        stroke: BTN_BLUE_STROKE,
         strokeWidth: 2,
         radius: 8,
         textOptions: {
           font: this.mobile ? "bold 28px sans-serif" : "bold 22px sans-serif",
-          color: "#d8e4f7",
+          color: "#ffffff",
         },
         onClick: () => this._joinRoom(roomName),
       });
@@ -588,7 +618,7 @@ export class Battleship extends App {
       x: cx, y: this.mobile ? y + 20 : 520,
       text: "",
       font: this.mobile ? "18px monospace" : "16px monospace",
-      color: "#8fa9d0",
+      color: TEXT_SECONDARY,
       align: "center",
       baseline: "middle",
     });
@@ -605,7 +635,7 @@ export class Battleship extends App {
 
     const screen = new Panel({
       x: 0, y: 0, w: "100%", h: "100%",
-      fill: "#101820",
+      fill: BG_SCREEN,
       stroke: null,
     });
 
@@ -613,8 +643,8 @@ export class Battleship extends App {
     screen.add(new Button({
       x: 24, y: 24, w: 140, h: 48,
       text: "Leave",
-      fill: "#3a2a2a",
-      stroke: "#8f6060",
+      fill: BTN_RED_FILL,
+      stroke: BTN_RED_STROKE,
       strokeWidth: 2,
       radius: 8,
       textOptions: { font: "bold 18px sans-serif", color: "#ffffff" },
@@ -624,8 +654,8 @@ export class Battleship extends App {
     this.updateBtn = new Button({
       x: W - 164, y: 24, w: 140, h: 48,
       text: "Update",
-      fill: "#2a3552",
-      stroke: "#6a86b8",
+      fill: BTN_BLUE_FILL,
+      stroke: BTN_BLUE_STROKE,
       strokeWidth: 2,
       radius: 8,
       textOptions: { font: "bold 18px sans-serif", color: "#ffffff" },
@@ -638,7 +668,7 @@ export class Battleship extends App {
       y: 24 + 48 + 16,
       text: "",
       font: "14px monospace",
-      color: "#5f7a95",
+      color: TEXT_DIM,
       align: "center",
       baseline: "middle",
     });
@@ -649,7 +679,7 @@ export class Battleship extends App {
       y: 48,
       text: "",
       font: "bold 20px sans-serif",
-      color: "#d8e4f7",
+      color: TEXT_PRIMARY,
       align: "center",
       baseline: "middle",
     });
@@ -660,7 +690,7 @@ export class Battleship extends App {
       y: 78,
       text: "",
       font: "bold 18px sans-serif",
-      color: "#a0c0ff",
+      color: TEXT_TURN,
       align: "center",
       baseline: "middle",
     });
@@ -671,7 +701,7 @@ export class Battleship extends App {
       y: 104,
       text: "",
       font: "bold 16px sans-serif",
-      color: "#ffd060",
+      color: TEXT_FEEDBACK,
       align: "center",
       baseline: "middle",
     });
@@ -682,7 +712,7 @@ export class Battleship extends App {
       y: 36,
       text: "",
       font: "14px monospace",
-      color: "#8fa9d0",
+      color: TEXT_SECONDARY,
       align: "left",
       baseline: "middle",
     });
@@ -699,8 +729,8 @@ export class Battleship extends App {
     this.chatBtn = new Button({
       x: W - 164, y: H - 60, w: 140, h: 44,
       text: "Chat",
-      fill: "#2a3552",
-      stroke: "#6a86b8",
+      fill: BTN_BLUE_FILL,
+      stroke: BTN_BLUE_STROKE,
       strokeWidth: 2,
       radius: 8,
       textOptions: { font: "bold 18px sans-serif", color: "#ffffff" },
@@ -712,7 +742,7 @@ export class Battleship extends App {
       x: W - 20, y: H - 76,
       text: "",
       font: "bold 22px sans-serif",
-      color: "#ff5050",
+      color: TEXT_BADGE,
       align: "center",
       baseline: "middle",
     });
@@ -749,8 +779,8 @@ export class Battleship extends App {
     screen.add(this.myFrame);
     screen.add(this.opFrame);
 
-    this._drawBoardFrame(this.myFrame, boardPx, cell, "YOUR WATERS",  "#80a0c0");
-    this._drawBoardFrame(this.opFrame, boardPx, cell, "ENEMY WATERS", "#c08080");
+    this._drawBoardFrame(this.myFrame, boardPx, cell, "YOUR WATERS",  TEXT_LABEL_MY);
+    this._drawBoardFrame(this.opFrame, boardPx, cell, "ENEMY WATERS", TEXT_LABEL_OP);
 
     // Content layers.
     this.myLayer = new Panel({
@@ -773,7 +803,7 @@ export class Battleship extends App {
       stroke: BTN_DARK_STROKE,
       strokeWidth: 1,
       radius: 6,
-      textOptions: { font: "bold 14px sans-serif", color: "#d8e4f7" },
+      textOptions: { font: "bold 14px sans-serif", color: "#ffffff" },
       onClick: () => this._applyFlip(),
     });
     screen.add(this.flipBtn);
@@ -782,7 +812,7 @@ export class Battleship extends App {
       x: W / 2, y: Viewport.height - 40,
       text: "Mouse: hover and click. Keys: WASD/Arrows move, R rotate, Enter place or lock a shot.",
       font: "13px monospace",
-      color: "#607080",
+      color: TEXT_HINT,
       align: "center",
       baseline: "middle",
     }));
@@ -811,8 +841,8 @@ export class Battleship extends App {
     screen.add(this.myFrame);
     screen.add(this.opFrame);
 
-    this._drawBoardFrame(this.myFrame, boardPx, cell, "YOUR WATERS",  "#80a0c0");
-    this._drawBoardFrame(this.opFrame, boardPx, cell, "ENEMY WATERS", "#c08080");
+    this._drawBoardFrame(this.myFrame, boardPx, cell, "YOUR WATERS",  TEXT_LABEL_MY);
+    this._drawBoardFrame(this.opFrame, boardPx, cell, "ENEMY WATERS", TEXT_LABEL_OP);
 
     this.myLayer = new Panel({
       x: 0, y: 0, w: boardPx, h: boardPx,
@@ -833,7 +863,7 @@ export class Battleship extends App {
       stroke: BTN_DARK_STROKE,
       strokeWidth: 2,
       radius: 6,
-      textOptions: { font: "bold 18px sans-serif", color: "#d8e4f7" },
+      textOptions: { font: "bold 18px sans-serif", color: "#ffffff" },
       onClick: () => this._applyFlip(),
     });
     screen.add(this.flipBtn);
@@ -876,7 +906,7 @@ export class Battleship extends App {
         stroke: BTN_DARK_STROKE,
         strokeWidth: 2,
         radius: 8,
-        textOptions: { font: "bold 32px sans-serif", color: "#d8e4f7" },
+        textOptions: { font: "bold 32px sans-serif", color: "#ffffff" },
         onClick: () => this._nudgeFireCursor(d.dir),
       });
       b.visible = false;
@@ -1046,7 +1076,8 @@ export class Battleship extends App {
 
   // Build one board's frame contents into a composite. The
   // composite origin is the board's top-left. Label is drawn above
-  // at negative y in local space.
+  // at negative y in local space. The backing panel is the ocean;
+  // the grid lines are a lighter blue on top.
   _drawBoardFrame(composite, boardPx, cell, label, labelColor) {
     composite.add(new Text({
       x: 0, y: -28,
@@ -1060,21 +1091,28 @@ export class Battleship extends App {
     composite.add(new Panel({
       x: -2, y: -2,
       w: boardPx + 4, h: boardPx + 4,
-      fill: "#0a0e12",
-      stroke: "#2a3238",
+      fill: OCEAN_FRAME,
+      stroke: OCEAN_GRID,
       strokeWidth: 2,
+    }));
+
+    composite.add(new Panel({
+      x: 0, y: 0,
+      w: boardPx, h: boardPx,
+      fill: OCEAN_FILL,
+      stroke: null,
     }));
 
     for (let i = 0; i <= BOARD_W; i++) {
       composite.add(new Line({
         x1: i * cell, y1: 0,
         x2: i * cell, y2: boardPx,
-        stroke: "#1e262c", strokeWidth: 1,
+        stroke: OCEAN_GRID, strokeWidth: 1,
       }));
       composite.add(new Line({
         x1: 0, y1: i * cell,
         x2: boardPx, y2: i * cell,
-        stroke: "#1e262c", strokeWidth: 1,
+        stroke: OCEAN_GRID, strokeWidth: 1,
       }));
     }
   }
@@ -1101,8 +1139,8 @@ export class Battleship extends App {
     const box = new Panel({
       x: panelX, y: panelY,
       w: panelW, h: panelH,
-      fill: "#1a2434",
-      stroke: "#5a7ea8",
+      fill: BG_PANEL,
+      stroke: STROKE_PANEL,
       strokeWidth: 3,
       radius: 12,
     });
@@ -1112,7 +1150,7 @@ export class Battleship extends App {
       x: panelW / 2, y: 70,
       text: "",
       font: this.mobile ? "bold 40px sans-serif" : "bold 34px sans-serif",
-      color: "#d8e4f7",
+      color: TEXT_PRIMARY,
       align: "center",
       baseline: "middle",
     });
@@ -1192,7 +1230,7 @@ export class Battleship extends App {
       y: actionY - 30,
       text: "Choose who goes first:",
       font: mobile ? "bold 20px sans-serif" : "bold 16px sans-serif",
-      color: "#a0c0ff",
+      color: TEXT_TURN,
       align: "center",
       baseline: "middle",
     });
@@ -1429,7 +1467,7 @@ export class Battleship extends App {
       y: actionY - 30,
       text: "",
       font: mobile ? "bold 16px sans-serif" : "bold 16px sans-serif",
-      color: "#a0c0ff",
+      color: TEXT_TURN,
       align: "center",
       baseline: "middle",
     });
@@ -1455,7 +1493,7 @@ export class Battleship extends App {
     if (this.mobile) {
       const panel = new Panel({
         x: 0, y: 0, w: W, h: H,
-        fill: "#0d1216",
+        fill: BG_CHAT,
         stroke: null,
       });
       panel.visible = false;
@@ -1467,7 +1505,7 @@ export class Battleship extends App {
         x: 20, y: 30,
         text: "Room Chat",
         font: "bold 20px sans-serif",
-        color: "#8fa9d0",
+        color: TEXT_SECONDARY,
         align: "left",
         baseline: "middle",
       }));
@@ -1511,8 +1549,8 @@ export class Battleship extends App {
       const inputPanel = new Panel({
         x: inputX, y: rowY,
         w: inputW, h: 56,
-        fill: "#0a1018",
-        stroke: "#2a3552",
+        fill: BG_INSET,
+        stroke: STROKE_INSET,
         strokeWidth: 2,
         radius: 6,
       });
@@ -1523,7 +1561,7 @@ export class Battleship extends App {
         text: "",
         textOptions: {
           font: "18px monospace",
-          color: "#d8e4f7",
+          color: TEXT_PRIMARY,
           align: "left",
           baseline: "middle",
         },
@@ -1558,7 +1596,7 @@ export class Battleship extends App {
           y: logY + 4 + i * 22,
           text: "",
           font: "16px monospace",
-          color: "#c8d0d8",
+          color: TEXT_CHAT,
           align: "left",
           baseline: "top",
         });
@@ -1573,8 +1611,8 @@ export class Battleship extends App {
 
       const panel = new Panel({
         x: px, y: py, w: pw, h: ph,
-        fill: "#0d1216",
-        stroke: "#3a4d70",
+        fill: BG_CHAT,
+        stroke: STROKE_PANEL,
         strokeWidth: 2,
         radius: 8,
       });
@@ -1587,7 +1625,7 @@ export class Battleship extends App {
         x: 12, y: 10,
         text: "Room Chat",
         font: "bold 14px sans-serif",
-        color: "#8fa9d0",
+        color: TEXT_SECONDARY,
         align: "left",
         baseline: "top",
       }));
@@ -1618,7 +1656,7 @@ export class Battleship extends App {
           y: logY + 4 + i * 18,
           text: "",
           font: "13px monospace",
-          color: "#c8d0d8",
+          color: TEXT_CHAT,
           align: "left",
           baseline: "top",
         });
@@ -1633,8 +1671,8 @@ export class Battleship extends App {
       const inputPanel = new Panel({
         x: inputX, y: rowY,
         w: inputW, h: 36,
-        fill: "#0a1018",
-        stroke: "#2a3552",
+        fill: BG_INSET,
+        stroke: STROKE_INSET,
         strokeWidth: 1,
         radius: 4,
       });
@@ -1645,7 +1683,7 @@ export class Battleship extends App {
         text: "",
         textOptions: {
           font: "14px monospace",
-          color: "#d8e4f7",
+          color: TEXT_PRIMARY,
           align: "left",
           baseline: "middle",
         },
@@ -3683,7 +3721,7 @@ export class Battleship extends App {
           y: c.y * cell + 1,
           w: cell - 2,
           h: cell - 2,
-          fill: valid ? "#50a070" : "#a05050",
+          fill: valid ? COLOR_PLACE_OK : COLOR_PLACE_BAD,
           stroke: null,
         }));
       }
@@ -3772,7 +3810,7 @@ export class Battleship extends App {
         w: cell - 4,
         h: cell - 4,
         fill: "#ffffff",
-        stroke: "#ffd060",
+        stroke: COLOR_FIRE_CURSOR,
         strokeWidth: 2,
       }));
       return;
@@ -3787,7 +3825,7 @@ export class Battleship extends App {
         y: this.lockedShot.y * cell + 2,
         w: cell - 4,
         h: cell - 4,
-        fill: "#ffd060",
+        fill: COLOR_FIRE_CURSOR,
         stroke: null,
       }));
       return;
@@ -3800,7 +3838,7 @@ export class Battleship extends App {
       w: cell - 4,
       h: cell - 4,
       fill: null,
-      stroke: "#ffd060",
+      stroke: COLOR_FIRE_CURSOR,
       strokeWidth: 2,
     }));
   }
