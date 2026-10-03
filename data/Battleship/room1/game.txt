@@ -1,18 +1,18 @@
 #META
-started=1
-turn=0
-turnCount=2
+started=0
+turn=-1
+turnCount=0
 winner=-1
-firstMode=p2
-voteP0=
+firstMode=
+voteP0=me
 voteP1=
 readyP0=0
 readyP1=0
 #PLAYER 0
-name=tanagram
-fleet=4,0:5,0:6,0:7,0:8,0;1,9:2,9:3,9:4,9;9,3:9,4:9,5;7,7:7,8:7,9;0,2:0,3
+name=
+fleet=
 shots=
 #PLAYER 1
-name=MOTI
-fleet=4,1:5,1:6,1:7,1:8,1;9,6:9,7:9,8:9,9;0,7:0,8:0,9;3,7:3,8:3,9;0,3:0,4
-shots=7,0,1|6,0,1|5,3,0
+name=
+fleet=
+shots=
