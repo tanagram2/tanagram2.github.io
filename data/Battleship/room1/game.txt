@@ -5,7 +5,7 @@ turnCount=0
 winner=-1
 firstMode=
 voteP0=defer
-voteP1=
+voteP1=defer
 readyP0=0
 readyP1=0
 #PLAYER 0
