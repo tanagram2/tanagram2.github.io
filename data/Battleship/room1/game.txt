@@ -4,15 +4,17 @@ turn=-1
 turnCount=0
 winner=-1
 firstMode=
-voteP0=me
+voteP0=
 voteP1=
 readyP0=0
 readyP1=0
+rematchP0=0
+rematchP1=0
 #PLAYER 0
-name=
+name=tanagram
 fleet=
 shots=
 #PLAYER 1
-name=
+name=MOTH
 fleet=
 shots=
