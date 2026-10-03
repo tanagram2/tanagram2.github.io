@@ -15,6 +15,6 @@ name=
 fleet=
 shots=
 #PLAYER 1
-name=
-fleet=
+name=PODE
+fleet=7,1:7,2:7,3:7,4:7,5;9,1:9,2:9,3:9,4;1,0:2,0:3,0;0,8:1,8:2,8;6,8:7,8
 shots=
