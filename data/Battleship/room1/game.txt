@@ -1,0 +1,20 @@
+#META
+started=1
+turn=1
+turnCount=1
+winner=-1
+firstMode=p2
+voteP0=
+voteP1=
+readyP0=0
+readyP1=0
+rematchP0=0
+rematchP1=0
+#PLAYER 0
+name=
+fleet=
+shots=
+#PLAYER 1
+name=
+fleet=
+shots=
