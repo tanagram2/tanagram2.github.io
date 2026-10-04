@@ -142,6 +142,14 @@
 // so the cursor reads as a ring inside the cell rather than flush
 // with the cell border.
 //
+// Cursor during the in-flight fire window: on mobile the cursor IS
+// the shot target, so while _awaitingFire is true the mobile cursor
+// draw is skipped entirely. The just-placed hit/miss Rect draws over
+// that cell normally, so a hit never flashes a greyed-out cursor on
+// top of itself before the post-fire reset to (0,0) runs. Desktop
+// has no equivalent window because the lock concept hides the
+// outline cursor while a shot is locked.
+//
 // Button color convention: blue is the default button look (Flip,
 // Rotate, Reset, Show Controls, Hide, Return, Update, Chat, room
 // list, Enter). Green and red are reserved for state or emphasis
@@ -265,6 +273,7 @@ const COLOR_MISS          = "#b0d8f0";  // splash
 const COLOR_PLACE_OK      = "#30c060";
 const COLOR_PLACE_BAD     = "#d04040";
 const COLOR_FIRE_CURSOR   = "#ffcc33";
+const COLOR_FIRE_CURSOR_LIGHT = "#ffe680";  // locked-shot border
 
 // Greys used for the greyed-out cursor when it hovers a cell that
 // has already been fired upon. Two greys (fill + stroke) so the
@@ -4193,14 +4202,16 @@ export class Battleship extends App {
     }
 
     // Mobile: cursor is drawn whenever it is this player's turn in
-    // the fire phase, INCLUDING while _awaitingFire is true. This
-    // keeps the cursor visible during "Firing..." so the shooter can
-    // see where the shot is going. After a hit, the cursor has been
-    // reset to (0,0) and this render picks it up. If the cursor is
-    // on an already-fired cell, swap to the grey palette so it reads
-    // as inert.
+    // the fire phase. During the in-flight fire window (_awaitingFire)
+    // the cursor is skipped entirely: the shot the shooter just placed
+    // draws over that cell instead, so a hit never flashes a greyed
+    // cursor on top of itself before the post-fire reset to (0,0).
+    // In all other cases, if the cursor is on an already-fired cell
+    // it swaps to the grey palette so it reads as inert.
     if (this.mobile) {
       if (!this._canShowMobileCursor()) return;
+      if (this._awaitingFire) return;
+
       const c = this.fireCursor;
       const fired = this._cellIsFired(c.x, c.y);
       const fill   = fired ? COLOR_CURSOR_GREY_FILL   : "#ffffff";
@@ -4227,20 +4238,22 @@ export class Battleship extends App {
         w: cell - 4,
         h: cell - 4,
         fill: COLOR_FIRE_CURSOR,
-        stroke: null,
+        stroke: COLOR_FIRE_CURSOR_LIGHT,
+        strokeWidth: 2,
       }));
       return;
     }
 
     const c = this.fireCursor;
     const fired = this._cellIsFired(c.x, c.y);
+    const fill   = fired ? COLOR_CURSOR_GREY_FILL : null;
     const stroke = fired ? COLOR_CURSOR_GREY_STROKE : COLOR_FIRE_CURSOR;
     this.opLayer.add(new Rect({
       x: c.x * cell + 2,
       y: c.y * cell + 2,
       w: cell - 4,
       h: cell - 4,
-      fill: null,
+      fill: fill,
       stroke: stroke,
       strokeWidth: 2,
     }));
