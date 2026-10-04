@@ -133,9 +133,14 @@
 // grey self shape over the ocean; a bare Composite paints nothing.
 //
 // Per-cell Rects (ships, hits, misses, sunk, placement preview)
-// carry a stroke one shade lighter than their fill, so the blue
-// gridlines do not run through them. The inset on each side stays
-// at 1, so the border ring sits inside the cell.
+// fill their whole cell and carry a stroke one shade lighter than
+// their fill. Because they fill the whole cell and draw after the
+// frame's gridlines, the cell's own border replaces the lightblue
+// gridline along every edge of an occupied cell.
+//
+// The cursor Rects (mobile and desktop) are inset further (+2 / -4)
+// so the cursor reads as a ring inside the cell rather than flush
+// with the cell border.
 //
 // Button color convention: blue is the default button look (Flip,
 // Rotate, Reset, Show Controls, Hide, Return, Update, Chat, room
@@ -4186,60 +4191,6 @@ export class Battleship extends App {
         }
       }
     }
-
-    // Mobile: cursor is drawn whenever it is this player's turn in
-    // the fire phase, INCLUDING while _awaitingFire is true. This
-    // keeps the cursor visible during "Firing..." so the shooter can
-    // see where the shot is going. After a hit, the cursor has been
-    // reset to (0,0) and this render picks it up. If the cursor is
-    // on an already-fired cell, swap to the grey palette so it reads
-    // as inert.
-    if (this.mobile) {
-      if (!this._canShowMobileCursor()) return;
-      const c = this.fireCursor;
-      const fired = this._cellIsFired(c.x, c.y);
-      const fill   = fired ? COLOR_CURSOR_GREY_FILL   : "#ffffff";
-      const stroke = fired ? COLOR_CURSOR_GREY_STROKE : COLOR_FIRE_CURSOR;
-      this.opLayer.add(new Rect({
-        x: c.x * cell + 2,
-        y: c.y * cell + 2,
-        w: cell - 4,
-        h: cell - 4,
-        fill: fill,
-        stroke: stroke,
-        strokeWidth: 2,
-      }));
-      return;
-    }
-
-    // Desktop.
-    if (!this._canFireNow()) return;
-
-    if (this.lockedShot) {
-      this.opLayer.add(new Rect({
-        x: this.lockedShot.x * cell + 2,
-        y: this.lockedShot.y * cell + 2,
-        w: cell - 4,
-        h: cell - 4,
-        fill: COLOR_FIRE_CURSOR,
-        stroke: null,
-      }));
-      return;
-    }
-
-    const c = this.fireCursor;
-    const fired = this._cellIsFired(c.x, c.y);
-    const stroke = fired ? COLOR_CURSOR_GREY_STROKE : COLOR_FIRE_CURSOR;
-    this.opLayer.add(new Rect({
-      x: c.x * cell + 2,
-      y: c.y * cell + 2,
-      w: cell - 4,
-      h: cell - 4,
-      fill: null,
-      stroke: stroke,
-      strokeWidth: 2,
-    }));
-  }
 
     // Mobile: cursor is drawn whenever it is this player's turn in
     // the fire phase, INCLUDING while _awaitingFire is true. This
