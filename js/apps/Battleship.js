@@ -142,13 +142,16 @@
 // so the cursor reads as a ring inside the cell rather than flush
 // with the cell border.
 //
-// Cursor during the in-flight fire window: on mobile the cursor IS
-// the shot target, so while _awaitingFire is true the mobile cursor
-// draw is skipped entirely. The just-placed hit/miss Rect draws over
-// that cell normally, so a hit never flashes a greyed-out cursor on
-// top of itself before the post-fire reset to (0,0) runs. Desktop
-// has no equivalent window because the lock concept hides the
-// outline cursor while a shot is locked.
+// Mobile cursor color rule: during the in-flight fire window
+// (_awaitingFire true, from tapping Fire! until the write lands and
+// this.fireCursor resets), the cursor is drawn at the shot cell in
+// the LIVE palette (white fill, yellow border) even if that cell
+// now reads as already-fired in the local game state. This avoids a
+// grey flash on the just-placed shot. Outside that window the
+// normal rule applies: grey palette on an already-fired cell, live
+// palette otherwise. The cursor is never suppressed; it is redrawn
+// at (0,0) after the post-fire reset on the same frame the reset
+// runs.
 //
 // Button color convention: blue is the default button look (Flip,
 // Rotate, Reset, Show Controls, Hide, Return, Update, Chat, room
@@ -4201,19 +4204,18 @@ export class Battleship extends App {
       }
     }
 
-    // Mobile: cursor is drawn whenever it is this player's turn in
-    // the fire phase. During the in-flight fire window (_awaitingFire)
-    // the cursor is skipped entirely: the shot the shooter just placed
-    // draws over that cell instead, so a hit never flashes a greyed
-    // cursor on top of itself before the post-fire reset to (0,0).
-    // In all other cases, if the cursor is on an already-fired cell
-    // it swaps to the grey palette so it reads as inert.
+    // Mobile cursor. Drawn whenever it is this player's turn in the
+    // fire phase, INCLUDING the in-flight window while _awaitingFire
+    // is true. During that window the cursor uses the LIVE palette
+    // (white fill, yellow border) even if the cell already reads as
+    // fired in the local state, so a just-placed shot never flashes
+    // grey under the cursor. Outside the window, the normal palette
+    // rule applies: grey on an already-fired cell, live otherwise.
     if (this.mobile) {
       if (!this._canShowMobileCursor()) return;
-      if (this._awaitingFire) return;
 
       const c = this.fireCursor;
-      const fired = this._cellIsFired(c.x, c.y);
+      const fired = !this._awaitingFire && this._cellIsFired(c.x, c.y);
       const fill   = fired ? COLOR_CURSOR_GREY_FILL   : "#ffffff";
       const stroke = fired ? COLOR_CURSOR_GREY_STROKE : COLOR_FIRE_CURSOR;
       this.opLayer.add(new Rect({
