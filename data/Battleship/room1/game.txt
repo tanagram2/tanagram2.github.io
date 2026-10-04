@@ -11,8 +11,8 @@ readyP1=0
 rematchP0=0
 rematchP1=0
 #PLAYER 0
-name=
-fleet=
+name=tan
+fleet=0,0:1,0:2,0:3,0:4,0;0,1:1,1:2,1:3,1;0,2:1,2:2,2;0,3:1,3:2,3;0,4:1,4
 shots=
 #PLAYER 1
 name=FFFF
