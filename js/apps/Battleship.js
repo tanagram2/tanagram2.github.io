@@ -111,16 +111,31 @@
 // line says "Sunk! - fire again" instead of "HIT - fire again",
 // and "Sunk! - you win!" when the sinking shot wins the game.
 //
-// Boards: each board is drawn as an ocean-blue interior with a
-// black border, and a lighter blue grid on top. Ships are neutral
-// grey (metal on water). Hits are red on your board and green on
-// the enemy board. Misses are pale blue, reading as a splash.
-// Sunk ships use a dark shade of the same hit color.
+// Boards: each board is drawn as a black border ring, then an
+// ocean-blue interior with no stroke, then grid lines, then the
+// content layer (ships, shots, cursor) above the frame.
+//
+// The border is a black filled Rect sized larger than the board by
+// OCEAN_BORDER_T on each side, placed as the FIRST child of the
+// frame composite. The ocean Panel (fill only, no stroke) covers
+// the inner portion, leaving the outer ring of black visible as
+// the border. Gridlines at the edges sit exactly on the boundary
+// between the black ring and the ocean. Content-layer Rects at
+// edge cells draw over the ring. This is the standard technique
+// for "a border that lives outside the shape" - Canvas strokes
+// are centered on the path, so a stroked rect always bleeds
+// inward. A backdrop rect plus a stroke-less fill gives a border
+// with no inward bleed and no half-pixel ambiguity.
 //
 // The content layers (myLayer, opLayer) are bare Composites, not
 // Panels. They exist only to hold the fleet / shot Rects and be
 // positioned. A Panel with default or null fill paints its default
 // grey self shape over the ocean; a bare Composite paints nothing.
+//
+// Per-cell Rects (ships, hits, misses, sunk, placement preview)
+// carry a stroke one shade lighter than their fill, so the blue
+// gridlines do not run through them. The inset on each side stays
+// at 1, so the border ring sits inside the cell.
 //
 // Button color convention: blue is the default button look (Flip,
 // Rotate, Reset, Show Controls, Hide, Return, Update, Chat, room
@@ -228,9 +243,10 @@ const STROKE_INSET = "#606060";  // username field, chat input strokes
 const STROKE_PANEL = "#6e6e6e";  // panel / box strokes
 
 // Ocean (board interiors).
-const OCEAN_FILL   = "#1a4a7a";  // board interior (the water)
-const OCEAN_GRID   = "#3a7ab0";  // board grid lines
-const OCEAN_BORDER = "#000000";  // board border
+const OCEAN_FILL    = "#1a4a7a";  // board interior (the water)
+const OCEAN_GRID    = "#3a7ab0";  // board grid lines
+const OCEAN_BORDER  = "#000000";  // board border
+const OCEAN_BORDER_T = 3;         // board border thickness, px
 
 // Board cell colors. Ships are neutral grey. Hits are red (your
 // board) or green (enemy board). Misses are a pale-blue splash.
@@ -244,6 +260,12 @@ const COLOR_MISS          = "#b0d8f0";  // splash
 const COLOR_PLACE_OK      = "#30c060";
 const COLOR_PLACE_BAD     = "#d04040";
 const COLOR_FIRE_CURSOR   = "#ffcc33";
+
+// Greys used for the greyed-out cursor when it hovers a cell that
+// has already been fired upon. Two greys (fill + stroke) so the
+// greyed cursor still reads as a cursor, not a solid block.
+const COLOR_CURSOR_GREY_FILL   = "#4a4a4a";
+const COLOR_CURSOR_GREY_STROKE = "#8a8a8a";
 
 // Text.
 const TEXT_PRIMARY   = "#eef2f8";
@@ -320,6 +342,39 @@ function formatTime(iso) {
   const m = String(d.getMinutes()).padStart(2, "0");
   const s = String(d.getSeconds()).padStart(2, "0");
   return h + ":" + m + ":" + s;
+}
+
+// Return a lighter shade of a hex color, for per-cell borders.
+// Parses #rgb and #rrggbb. Returns the input unchanged if it
+// cannot parse, so an exotic color degrades to "same as fill"
+// rather than crashing.
+
+function lightenHex(hex, amount) {
+  if (typeof hex !== "string") return hex;
+  const h = hex.trim();
+  if (!h.startsWith("#")) return hex;
+
+  let r, g, b;
+  const body = h.slice(1);
+  if (body.length === 3) {
+    r = parseInt(body[0] + body[0], 16);
+    g = parseInt(body[1] + body[1], 16);
+    b = parseInt(body[2] + body[2], 16);
+  } else if (body.length === 6) {
+    r = parseInt(body.slice(0, 2), 16);
+    g = parseInt(body.slice(2, 4), 16);
+    b = parseInt(body.slice(4, 6), 16);
+  } else {
+    return hex;
+  }
+  if (Number.isNaN(r) || Number.isNaN(g) || Number.isNaN(b)) return hex;
+
+  const nr = Math.min(255, Math.round(r + 255 * amount));
+  const ng = Math.min(255, Math.round(g + 255 * amount));
+  const nb = Math.min(255, Math.round(b + 255 * amount));
+
+  const toHex = (n) => n.toString(16).padStart(2, "0");
+  return "#" + toHex(nr) + toHex(ng) + toHex(nb);
 }
 
 export class Battleship extends App {
@@ -1250,28 +1305,45 @@ export class Battleship extends App {
 
   // Build one board's frame contents into a composite. The
   // composite origin is the board's top-left. Label is drawn above
-  // at negative y in local space. The interior is ocean blue with a
-  // black border; grid lines are a lighter blue on top.
+  // at negative y in local space.
+  //
+  // Order, bottom to top:
+  //   1. Black border rect at (-T, -T, boardPx + 2T, boardPx + 2T).
+  //      Only the outer strip is visible after the ocean fills
+  //      over the inner portion.
+  //   2. Ocean Panel fill, no stroke, at (0, 0, boardPx, boardPx).
+  //   3. Grid lines, 1px blue, at cell boundaries.
+  //   4. Label at y=-28 (above the board).
+  //
+  // Shots / ships / cursor live in the content layer, a sibling of
+  // the frame added after it, so they draw over the frame's
+  // contents including the black ring at edge cells.
   _drawBoardFrame(composite, boardPx, cell, label, labelColor) {
-    composite.add(new Text({
-      x: 0, y: -28,
-      text: label,
-      font: "bold 14px monospace",
-      color: labelColor,
-      align: "left",
-      baseline: "middle",
+    const T = OCEAN_BORDER_T;
+
+    // 1. Black border backdrop. Sits behind everything else. The
+    //    ocean covers the inner portion; the outer strip remains as
+    //    the visible border.
+    composite.add(new Rect({
+      x: -T, y: -T,
+      w: boardPx + T * 2,
+      h: boardPx + T * 2,
+      fill: OCEAN_BORDER,
+      stroke: null,
     }));
 
-    // Ocean interior with black border, as a single filled rect.
+    // 2. Ocean fill. No stroke: the border is the backdrop rect
+    //    above. A stroked rect would bleed inward by half the
+    //    stroke width and sit centered on the ocean's edge.
     composite.add(new Panel({
       x: 0, y: 0,
       w: boardPx, h: boardPx,
       fill: OCEAN_FILL,
-      stroke: OCEAN_BORDER,
-      strokeWidth: 3,
+      stroke: null,
       radius: 0,
     }));
 
+    // 3. Grid lines.
     for (let i = 0; i <= BOARD_W; i++) {
       composite.add(new Line({
         x1: i * cell, y1: 0,
@@ -1284,6 +1356,16 @@ export class Battleship extends App {
         stroke: OCEAN_GRID, strokeWidth: 1,
       }));
     }
+
+    // 4. Label.
+    composite.add(new Text({
+      x: 0, y: -28,
+      text: label,
+      font: "bold 14px monospace",
+      color: labelColor,
+      align: "left",
+      baseline: "middle",
+    }));
   }
 
   // ---------- End-of-game panel ----------
@@ -3631,6 +3713,15 @@ export class Battleship extends App {
       && this._bothFleetsIn();
   }
 
+  // Is (x, y) already in my shots list? Used to grey the cursor
+  // when it sits on a cell that has already been fired upon.
+  _cellIsFired(x, y) {
+    if (!this.game || !this.game.players) return false;
+    const me = this.game.players["p" + this.slot];
+    if (!me || !me.shots) return false;
+    return this._shotAt(me.shots, x, y);
+  }
+
   _bothFleetsIn() {
     if (!this.game || !this.game.players) return false;
     for (let p = 0; p < SLOTS; p++) {
@@ -3663,6 +3754,10 @@ export class Battleship extends App {
       cx = this.lockedShot.x;
       cy = this.lockedShot.y;
     }
+
+    // Guard against firing at an already-fired cell. The UI is
+    // supposed to prevent this, but double-check before the write.
+    if (this._cellIsFired(cx, cy)) return;
 
     this._firing = true;
     this._awaitingFire = true;
@@ -3957,13 +4052,15 @@ export class Battleship extends App {
       for (const ship of fleet) {
         const sunk = oppShots ? this._isShipSunk(ship, oppShots) : false;
         for (const c of ship.cells) {
+          const fillColor = sunk ? COLOR_MY_SUNK : COLOR_SHIP;
           this.myLayer.add(new Rect({
             x: c.x * cell + 1,
             y: c.y * cell + 1,
             w: cell - 2,
             h: cell - 2,
-            fill: sunk ? COLOR_MY_SUNK : COLOR_SHIP,
-            stroke: null,
+            fill: fillColor,
+            stroke: this._cellBorder(fillColor),
+            strokeWidth: 1,
           }));
         }
       }
@@ -3975,13 +4072,15 @@ export class Battleship extends App {
         // draws in the dark sunk color and the overlay would cover
         // it.
         if (s.hit && this._shipAtIsSunk(fleet, oppShots, s.x, s.y)) continue;
+        const fillColor = s.hit ? COLOR_MY_HIT : COLOR_MISS;
         this.myLayer.add(new Rect({
           x: s.x * cell + 1,
           y: s.y * cell + 1,
           w: cell - 2,
           h: cell - 2,
-          fill: s.hit ? COLOR_MY_HIT : COLOR_MISS,
-          stroke: null,
+          fill: fillColor,
+          stroke: this._cellBorder(fillColor),
+          strokeWidth: 1,
         }));
       }
     }
@@ -4000,6 +4099,8 @@ export class Battleship extends App {
       const ship  = FLEET[this.placeIdx];
       const cells = this._cellsFor(ship.len, anchor.x, anchor.y, horiz);
       const valid = this._cellsValid(cells, this.myFleet);
+      const fillColor = valid ? COLOR_PLACE_OK : COLOR_PLACE_BAD;
+      const borderColor = this._cellBorder(fillColor);
       for (const c of cells) {
         if (c.x < 0 || c.y < 0 || c.x >= BOARD_W || c.y >= BOARD_H) continue;
         this.myLayer.add(new Rect({
@@ -4007,8 +4108,9 @@ export class Battleship extends App {
           y: c.y * cell + 1,
           w: cell - 2,
           h: cell - 2,
-          fill: valid ? COLOR_PLACE_OK : COLOR_PLACE_BAD,
-          stroke: null,
+          fill: fillColor,
+          stroke: borderColor,
+          strokeWidth: 1,
         }));
       }
     }
@@ -4053,13 +4155,15 @@ export class Battleship extends App {
         // Skip cells that belong to a sunk enemy ship: that ship is
         // rendered separately below in dark green.
         if (s.hit && this._shipAtIsSunk(oppFleet, myShots, s.x, s.y)) continue;
+        const fillColor = s.hit ? COLOR_OP_HIT : COLOR_MISS;
         this.opLayer.add(new Rect({
           x: s.x * cell + 1,
           y: s.y * cell + 1,
           w: cell - 2,
           h: cell - 2,
-          fill: s.hit ? COLOR_OP_HIT : COLOR_MISS,
-          stroke: null,
+          fill: fillColor,
+          stroke: this._cellBorder(fillColor),
+          strokeWidth: 1,
         }));
       }
     }
@@ -4076,7 +4180,8 @@ export class Battleship extends App {
             w: cell - 2,
             h: cell - 2,
             fill: COLOR_OP_SUNK,
-            stroke: null,
+            stroke: this._cellBorder(COLOR_OP_SUNK),
+            strokeWidth: 1,
           }));
         }
       }
@@ -4086,17 +4191,22 @@ export class Battleship extends App {
     // the fire phase, INCLUDING while _awaitingFire is true. This
     // keeps the cursor visible during "Firing..." so the shooter can
     // see where the shot is going. After a hit, the cursor has been
-    // reset to (0,0) and this render picks it up.
+    // reset to (0,0) and this render picks it up. If the cursor is
+    // on an already-fired cell, swap to the grey palette so it reads
+    // as inert.
     if (this.mobile) {
       if (!this._canShowMobileCursor()) return;
       const c = this.fireCursor;
+      const fired = this._cellIsFired(c.x, c.y);
+      const fill   = fired ? COLOR_CURSOR_GREY_FILL   : "#ffffff";
+      const stroke = fired ? COLOR_CURSOR_GREY_STROKE : COLOR_FIRE_CURSOR;
       this.opLayer.add(new Rect({
         x: c.x * cell + 2,
         y: c.y * cell + 2,
         w: cell - 4,
         h: cell - 4,
-        fill: "#ffffff",
-        stroke: COLOR_FIRE_CURSOR,
+        fill: fill,
+        stroke: stroke,
         strokeWidth: 2,
       }));
       return;
@@ -4118,15 +4228,23 @@ export class Battleship extends App {
     }
 
     const c = this.fireCursor;
+    const fired = this._cellIsFired(c.x, c.y);
+    const stroke = fired ? COLOR_CURSOR_GREY_STROKE : COLOR_FIRE_CURSOR;
     this.opLayer.add(new Rect({
       x: c.x * cell + 2,
       y: c.y * cell + 2,
       w: cell - 4,
       h: cell - 4,
       fill: null,
-      stroke: COLOR_FIRE_CURSOR,
+      stroke: stroke,
       strokeWidth: 2,
     }));
+  }
+
+  // Lighter shade of a cell fill, used as that cell's border. Keeps
+  // the blue gridlines from running through ships / hits / misses.
+  _cellBorder(fill) {
+    return lightenHex(fill, 0.18);
   }
 
   _renderButtons() {
@@ -4311,6 +4429,11 @@ export class Battleship extends App {
           this.placementControlsToggle.setText(
             this.placementControlsVisible ? "Hide Controls" : "Show Controls"
           );
+          if (placingWrite) {
+            this.placementControlsToggle.setBaseStyle({ fill: BUSY_FILL, stroke: BUSY_STROKE });
+          } else {
+            this.placementControlsToggle.setBaseStyle({ fill: BTN_BLUE_FILL, stroke: BTN_BLUE_STROKE });
+          }
         } else {
           this.placementControlsToggle.visible = false;
         }
