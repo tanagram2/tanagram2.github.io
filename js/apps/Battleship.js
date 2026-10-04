@@ -4054,10 +4054,10 @@ export class Battleship extends App {
         for (const c of ship.cells) {
           const fillColor = sunk ? COLOR_MY_SUNK : COLOR_SHIP;
           this.myLayer.add(new Rect({
-            x: c.x * cell + 1,
-            y: c.y * cell + 1,
-            w: cell - 2,
-            h: cell - 2,
+            x: c.x * cell,
+            y: c.y * cell,
+            w: cell,
+            h: cell,
             fill: fillColor,
             stroke: this._cellBorder(fillColor),
             strokeWidth: 1,
@@ -4074,10 +4074,10 @@ export class Battleship extends App {
         if (s.hit && this._shipAtIsSunk(fleet, oppShots, s.x, s.y)) continue;
         const fillColor = s.hit ? COLOR_MY_HIT : COLOR_MISS;
         this.myLayer.add(new Rect({
-          x: s.x * cell + 1,
-          y: s.y * cell + 1,
-          w: cell - 2,
-          h: cell - 2,
+          x: s.x * cell,
+          y: s.y * cell,
+          w: cell,
+          h: cell,
           fill: fillColor,
           stroke: this._cellBorder(fillColor),
           strokeWidth: 1,
@@ -4104,10 +4104,10 @@ export class Battleship extends App {
       for (const c of cells) {
         if (c.x < 0 || c.y < 0 || c.x >= BOARD_W || c.y >= BOARD_H) continue;
         this.myLayer.add(new Rect({
-          x: c.x * cell + 1,
-          y: c.y * cell + 1,
-          w: cell - 2,
-          h: cell - 2,
+          x: c.x * cell,
+          y: c.y * cell,
+          w: cell,
+          h: cell,
           fill: fillColor,
           stroke: borderColor,
           strokeWidth: 1,
@@ -4157,10 +4157,10 @@ export class Battleship extends App {
         if (s.hit && this._shipAtIsSunk(oppFleet, myShots, s.x, s.y)) continue;
         const fillColor = s.hit ? COLOR_OP_HIT : COLOR_MISS;
         this.opLayer.add(new Rect({
-          x: s.x * cell + 1,
-          y: s.y * cell + 1,
-          w: cell - 2,
-          h: cell - 2,
+          x: s.x * cell,
+          y: s.y * cell,
+          w: cell,
+          h: cell,
           fill: fillColor,
           stroke: this._cellBorder(fillColor),
           strokeWidth: 1,
@@ -4175,10 +4175,10 @@ export class Battleship extends App {
         if (!this._isShipSunk(ship, myShots)) continue;
         for (const c of ship.cells) {
           this.opLayer.add(new Rect({
-            x: c.x * cell + 1,
-            y: c.y * cell + 1,
-            w: cell - 2,
-            h: cell - 2,
+            x: c.x * cell,
+            y: c.y * cell,
+            w: cell,
+            h: cell,
             fill: COLOR_OP_SUNK,
             stroke: this._cellBorder(COLOR_OP_SUNK),
             strokeWidth: 1,
@@ -4186,6 +4186,60 @@ export class Battleship extends App {
         }
       }
     }
+
+    // Mobile: cursor is drawn whenever it is this player's turn in
+    // the fire phase, INCLUDING while _awaitingFire is true. This
+    // keeps the cursor visible during "Firing..." so the shooter can
+    // see where the shot is going. After a hit, the cursor has been
+    // reset to (0,0) and this render picks it up. If the cursor is
+    // on an already-fired cell, swap to the grey palette so it reads
+    // as inert.
+    if (this.mobile) {
+      if (!this._canShowMobileCursor()) return;
+      const c = this.fireCursor;
+      const fired = this._cellIsFired(c.x, c.y);
+      const fill   = fired ? COLOR_CURSOR_GREY_FILL   : "#ffffff";
+      const stroke = fired ? COLOR_CURSOR_GREY_STROKE : COLOR_FIRE_CURSOR;
+      this.opLayer.add(new Rect({
+        x: c.x * cell + 2,
+        y: c.y * cell + 2,
+        w: cell - 4,
+        h: cell - 4,
+        fill: fill,
+        stroke: stroke,
+        strokeWidth: 2,
+      }));
+      return;
+    }
+
+    // Desktop.
+    if (!this._canFireNow()) return;
+
+    if (this.lockedShot) {
+      this.opLayer.add(new Rect({
+        x: this.lockedShot.x * cell + 2,
+        y: this.lockedShot.y * cell + 2,
+        w: cell - 4,
+        h: cell - 4,
+        fill: COLOR_FIRE_CURSOR,
+        stroke: null,
+      }));
+      return;
+    }
+
+    const c = this.fireCursor;
+    const fired = this._cellIsFired(c.x, c.y);
+    const stroke = fired ? COLOR_CURSOR_GREY_STROKE : COLOR_FIRE_CURSOR;
+    this.opLayer.add(new Rect({
+      x: c.x * cell + 2,
+      y: c.y * cell + 2,
+      w: cell - 4,
+      h: cell - 4,
+      fill: null,
+      stroke: stroke,
+      strokeWidth: 2,
+    }));
+  }
 
     // Mobile: cursor is drawn whenever it is this player's turn in
     // the fire phase, INCLUDING while _awaitingFire is true. This
