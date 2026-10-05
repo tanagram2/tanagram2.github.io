@@ -45,6 +45,21 @@
 // blob, and the presence blob; updates the message and user lists;
 // refreshes the client's own presence line; writes presence back.
 //
+// Message ordering: the message list is rebuilt from the log file on
+// every cycle that sees a new log sha, in FILE ORDER. The list is not
+// an append-only local accumulation. This makes log.txt the single
+// source of truth for order: two clients that agree on the file agree
+// on the order. The sha cache still skips the blob read when the log
+// has not changed, and in that case the list stays as-is (which is
+// already correct, because the file has not changed).
+//
+// Optimistic echo: _sendMessage appends the sender's own line to the
+// local list immediately, so the sender sees their message without
+// waiting for the next cycle. A kick-cycle runs after a successful
+// send, so the local list is rebuilt from disk order within a second
+// or two, correcting any transient mismatch between two near-
+// simultaneous senders.
+//
 // Request budget notes:
 //   - _fetchTreeContext uses the commits-by-ref endpoint to fold the
 //     ref read and the commit read into one request. Then one tree
@@ -112,7 +127,15 @@
 // The reset path runs ONLY when presence reads as zero present. If
 // even one slot is live (for example a lone player waiting for
 // others), a new joiner reads the room as alive, claims a free slot,
-// and never touches the reset path.
+// and never touches the reset path. That means a joiner can see
+// messages sent before they arrived, in file order, as long as at
+// least one other presence line was live at the moment they joined.
+//
+// Status line: every screen's in-flight descriptor (Joining,
+// Resetting dead room, Updating, Sending, Leaving) is shown in the
+// same spot: to the right of the top-left button, on the header row.
+// Room screen and chat screen both use x=180, y=36. The status
+// text never moves between screens.
 //
 // Two Update buttons exist, on different screens, with different
 // behavior:
@@ -236,7 +259,6 @@ export class ChatRoom extends App {
     this.slot = null;
 
     this.messages = [];
-    this.seenKeys = new Set();
     this.users    = [];
 
     this._cycleTimer  = null;
@@ -529,8 +551,8 @@ export class ChatRoom extends App {
     });
     screen.add(this.roomListCountdownLabel);
 
-    // Status line, in the header strip next to the Return button.
-    // Aligned with the Return button vertically. Matches Battleship.
+    // Status line, in the header row, to the right of the Return
+    // button. Same position as the chat screen's statusLabel.
     this.roomStatusLabel = new Text({
       x: 180,
       y: 36,
@@ -638,9 +660,11 @@ export class ChatRoom extends App {
     });
     screen.add(this.roomTitleLabel);
 
+    // Status line, in the header row, to the right of the Leave
+    // button. Same position as the room screen's roomStatusLabel.
     this.statusLabel = new Text({
-      x: 24,
-      y: this.mobile ? 100 : 84,
+      x: 180,
+      y: 36,
       text: "",
       font: this.mobile ? "16px monospace" : "14px monospace",
       color: "#8fa9d0",
@@ -1627,7 +1651,6 @@ export class ChatRoom extends App {
       this.room        = room;
       this.slot        = this._claimedSlot;
       this.messages    = [];
-      this.seenKeys    = new Set();
       this.users       = [];
       this._lastLogSha = null;
 
@@ -1639,6 +1662,11 @@ export class ChatRoom extends App {
       this._clearStatus();
 
       this._startCycle();
+
+      // Kick an immediate cycle so a joiner sees the messages that
+      // were already on disk (as long as the room was not reset)
+      // without waiting up to PRESTAGGER_MAX_MS.
+      this._kickCycle();
     } finally {
       this._joining = false;
       if (pressedBtn) this._busyEnd(pressedBtn);
@@ -1715,6 +1743,17 @@ export class ChatRoom extends App {
     this._refreshCountdown();
   }
 
+  // Cancel the pending cycle timer and run a cycle immediately.
+  // Bounded cost: one extra cycle per call. Cannot loop.
+  _kickCycle() {
+    if (this.room === null) return;
+    if (this._cycleTimer) {
+      clearTimeout(this._cycleTimer);
+      this._cycleTimer = null;
+    }
+    this._runCycleLoop();
+  }
+
   async _runCycleLoop() {
     if (this.room === null) return;
 
@@ -1754,7 +1793,9 @@ export class ChatRoom extends App {
       const ctx = await this._fetchTreeContext();
 
       // Log read. Skip the blob read if the tree sha for the log has
-      // not changed since last cycle.
+      // not changed since last cycle. When the log HAS changed, the
+      // message list is rebuilt from the file content in file order.
+      // log.txt is the single source of truth for order.
       let logContent = null;
       const logEntry = ctx.entries.get(DATA_ROOT + this.room + "/log.txt");
       if (logEntry) {
@@ -1771,14 +1812,14 @@ export class ChatRoom extends App {
           ? logContent.split("\n").filter(l => l.length > 0)
           : [];
 
+        const parsed = [];
         for (const line of lines) {
-          const parsed = this._parseMessageLine(line);
-          if (!parsed) continue;
-          const key = parsed.username + "|" + parsed.iso + "|" + parsed.text;
-          if (this.seenKeys.has(key)) continue;
-          this.seenKeys.add(key);
-          this.messages.push(parsed);
+          const m = this._parseMessageLine(line);
+          if (m) parsed.push(m);
         }
+
+        this.messages = parsed;
+        this._renderMessages();
       }
 
       // Presence read.
@@ -1798,7 +1839,6 @@ export class ChatRoom extends App {
         }
       }
 
-      this._renderMessages();
       this._renderUsers();
 
       const mySlot = this.slot;
@@ -1983,15 +2023,16 @@ export class ChatRoom extends App {
       );
 
       // Our own write changed the log; invalidate the cached sha so
-      // the next cycle re-reads it.
+      // the next cycle re-reads it and rebuilds the message list
+      // from disk order.
       this._lastLogSha = null;
 
-      const key = this.username + "|" + iso + "|" + safe;
-      if (!this.seenKeys.has(key)) {
-        this.seenKeys.add(key);
-        this.messages.push({ username: this.username, iso, text: safe });
-        this._renderMessages();
-      }
+      // Optimistic echo: show the sender's own line immediately.
+      // The next cycle (kicked below) rebuilds the list from the
+      // file, which corrects the order in the case of two near-
+      // simultaneous senders.
+      this.messages.push({ username: this.username, iso, text: safe });
+      this._renderMessages();
 
       this.inputText = "";
       this._refreshChatInput();
@@ -2001,6 +2042,10 @@ export class ChatRoom extends App {
         this._chatKeyboardVisible = false;
         this._applyChatKeyboardLayout();
       }
+
+      // Kick a cycle so the disk order lands within a second or two
+      // rather than waiting up to CYCLE_MS.
+      this._kickCycle();
     } catch (e) {
       if (e.message === "BAD_SESSION") {
         this._handleApiError(e, "send");
