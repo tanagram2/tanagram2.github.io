@@ -84,6 +84,53 @@
 // deliberately shorter than the screen so the on-canvas keyboard has a
 // reserved strip below it. The box height is fixed and does not change
 // when the keyboard toggles.
+//
+// Slot claiming: the slot a joiner takes is decided INSIDE the
+// presence-claim build callback, against the freshest presence
+// content _writeWithRetry has, not against a pre-read taken before
+// the write. Two clients racing to join an empty room both read
+// 0/10, then both claim. Whichever commits first takes slot 0. The
+// loser's hint misses (or its PATCH conflicts), _writeWithRetry
+// re-reads, and the callback sees slot 0 now occupied and takes the
+// next free slot. The callback reports its chosen slot back out via
+// self._claimedSlot. If the room fills under the callback, it
+// returns null and _writeWithRetry returns { ok: false }; the join
+// surfaces "Room is full".
+//
+// Dead-room reset: a room is dead when presence.txt has zero
+// present lines. Only then does the reset path run. On the dead
+// path, the joiner claims a presence slot FIRST, then resets
+// log.txt. It NEVER resets presence.txt on this path. The old
+// presence reset was the destructive step: it could wipe a line
+// another joiner had just written, leaving two clients who each saw
+// a room with only themselves in it. Claim-first makes the claimer
+// present before any reset runs, so a second joiner arriving one
+// moment later sees a live room and takes another slot. The log.txt
+// reset is an idempotent no-op on an already-empty file, so a race
+// on it is harmless.
+//
+// The reset path runs ONLY when presence reads as zero present. If
+// even one slot is live (for example a lone player waiting for
+// others), a new joiner reads the room as alive, claims a free slot,
+// and never touches the reset path.
+//
+// Two Update buttons exist, on different screens, with different
+// behavior:
+//   - Chat screen Update (this.updateBtn) runs a full cycle
+//     (_manualUpdate -> _cycle). Throttled at UPDATE_THROTTLE.
+//   - Room list Update (this.roomListUpdateBtn) runs only a room
+//     occupancy read (_manualUpdateRoomList -> _refreshRoomOccupancy).
+//     No throttle. It is a read-only operation.
+// They share a visual style and a screen position on their
+// respective screens, but they are separate objects, wired to
+// separate handlers, with separate countdown labels and separate
+// timers.
+//
+// In-flight button feedback: every async button handler that talks
+// to the network greys the button that was pressed via
+// _busyStart / _busyEnd, and sets a status line. This is the visual
+// signal that a request is committed and the user does not need to
+// press again.
 
 import { App }       from "./App.js";
 import { Rect }      from "../primitives/Rect.js";
@@ -123,6 +170,10 @@ const STAGGER_MIN_MS    = 500;
 const STAGGER_MAX_MS    = 3000;
 const PRESTAGGER_MAX_MS = 2000;
 
+// Room list screen auto-refresh. Independent of CYCLE_MS so it can
+// be tuned on its own.
+const ROOMLIST_REFRESH_MS = 30000;
+
 const LEAVE_TIMESTAMP = "1970-01-01T00:00:00.000Z";
 
 const CURSOR_MS = 500;
@@ -130,6 +181,11 @@ const CURSOR_MS = 500;
 const SESSION_KEY = "canvasos.session.id";
 
 const API = "https://api.github.com/repos/" + OWNER + "/" + REPO + "/";
+
+// Busy-button colors. Used while a git request is in flight.
+
+const BUSY_FILL   = "#5a5a5a";
+const BUSY_STROKE = "#a8a8a8";
 
 // base64 helpers. The browser's btoa/atob mishandle non-ASCII.
 
@@ -187,11 +243,19 @@ export class ChatRoom extends App {
     this._cycleDelay  = CYCLE_MS;
     this._nextCycleAt = 0;
 
+    // Room-list-screen auto-refresh scheduler. Independent of the
+    // game cycle. Runs only while the room list is visible.
+    this._roomListTimer  = null;
+    this._roomListNextAt = 0;
+
     this._lastUpdate = 0;
     this._lastSend   = 0;
 
     this._sending  = false;
     this._updating = false;
+    this._joining  = false;
+    this._leaving  = false;
+    this._roomListUpdating = false;
 
     this._cursorOn    = true;
     this._cursorTimer = 0;
@@ -201,10 +265,14 @@ export class ChatRoom extends App {
 
     this._chatKeyboardVisible = false;
 
-    this._joining = false;
-
     // Last seen log blob sha. Used to skip re-reading an unchanged log.
     this._lastLogSha = null;
+
+    // Slot chosen by the presence-claim write callback during join.
+    // Set as a side effect and read back after the write lands, so
+    // this.slot reflects what the file actually granted, not what a
+    // pre-write read guessed.
+    this._claimedSlot = -1;
 
     this._opChain = Promise.resolve();
 
@@ -222,6 +290,7 @@ export class ChatRoom extends App {
     this._refreshUsernameField();
     this._refreshChatInput();
     this._refreshCountdown();
+    this._refreshRoomListCountdown();
   }
 
   // ---------- Session ----------
@@ -240,6 +309,21 @@ export class ChatRoom extends App {
     const next = this._opChain.then(fn, fn);
     this._opChain = next.catch(() => {});
     return next;
+  }
+
+  // ---------- Busy-button helper ----------
+
+  _busyStart(btn) {
+    if (!btn || !btn.self) return;
+    btn.setBusy(true);
+    btn.self.fill   = BUSY_FILL;
+    btn.self.stroke = BUSY_STROKE;
+  }
+
+  _busyEnd(btn) {
+    if (!btn || !btn.self) return;
+    btn.setBusy(false);
+    btn.setBaseStyle({});
   }
 
   // ---------- Field rendering ----------
@@ -263,6 +347,19 @@ export class ChatRoom extends App {
     const remainMs  = this._nextCycleAt - Date.now();
     const remainSec = remainMs > 0 ? Math.ceil(remainMs / 1000) : 0;
     this.cycleCountdownLabel.text = "auto: " + remainSec + "s";
+  }
+
+  _refreshRoomListCountdown() {
+    if (!this.roomListCountdownLabel) return;
+
+    if (!this._roomListNextAt) {
+      this.roomListCountdownLabel.text = "";
+      return;
+    }
+
+    const remainMs  = this._roomListNextAt - Date.now();
+    const remainSec = remainMs > 0 ? Math.ceil(remainMs / 1000) : 0;
+    this.roomListCountdownLabel.text = "auto: " + remainSec + "s";
   }
 
   // ---------- Screens ----------
@@ -405,6 +502,46 @@ export class ChatRoom extends App {
       onClick: () => this._goBack(),
     }));
 
+    // Room-list Update button. Distinct object from the chat
+    // screen's Update button. Wired to a handler that runs only a
+    // room occupancy read, not a full cycle. Same visual style and
+    // screen position as the chat screen's Update button.
+    this.roomListUpdateBtn = new Button({
+      x: W - 164, y: 24, w: 140, h: 48,
+      text: "Update",
+      fill: "#2a3552",
+      stroke: "#6a86b8",
+      strokeWidth: 2,
+      radius: 8,
+      textOptions: { font: "bold 18px sans-serif", color: "#ffffff" },
+      onClick: () => this._manualUpdateRoomList(),
+    });
+    screen.add(this.roomListUpdateBtn);
+
+    this.roomListCountdownLabel = new Text({
+      x: W - 164 + 70,
+      y: 24 + 48 + 16,
+      text: "",
+      font: "14px monospace",
+      color: "#5f7a95",
+      align: "center",
+      baseline: "middle",
+    });
+    screen.add(this.roomListCountdownLabel);
+
+    // Status line, in the header strip next to the Return button.
+    // Aligned with the Return button vertically. Matches Battleship.
+    this.roomStatusLabel = new Text({
+      x: 180,
+      y: 36,
+      text: "",
+      font: this.mobile ? "16px monospace" : "14px monospace",
+      color: "#8fa9d0",
+      align: "left",
+      baseline: "middle",
+    });
+    screen.add(this.roomStatusLabel);
+
     const cx = W / 2;
 
     screen.add(new Text({
@@ -443,16 +580,6 @@ export class ChatRoom extends App {
       y += btnH + gap;
     }
 
-    this.roomStatusLabel = new Text({
-      x: cx, y: this.mobile ? y + 20 : 520,
-      text: "",
-      font: this.mobile ? "18px monospace" : "16px monospace",
-      color: "#8fa9d0",
-      align: "center",
-      baseline: "middle",
-    });
-    screen.add(this.roomStatusLabel);
-
     return screen;
   }
 
@@ -465,7 +592,7 @@ export class ChatRoom extends App {
       stroke: null,
     });
 
-    screen.add(new Button({
+    this.leaveBtn = new Button({
       x: 24, y: 24, w: 140, h: 48,
       text: "Leave",
       fill: "#3a2a2a",
@@ -474,9 +601,10 @@ export class ChatRoom extends App {
       radius: 8,
       textOptions: { font: "bold 18px sans-serif", color: "#ffffff" },
       onClick: () => this._leaveRoom(),
-    }));
+    });
+    screen.add(this.leaveBtn);
 
-    screen.add(new Button({
+    this.updateBtn = new Button({
       x: W - 164, y: 24, w: 140, h: 48,
       text: "Update",
       fill: "#2a3552",
@@ -485,7 +613,8 @@ export class ChatRoom extends App {
       radius: 8,
       textOptions: { font: "bold 18px sans-serif", color: "#ffffff" },
       onClick: () => this._manualUpdate(),
-    }));
+    });
+    screen.add(this.updateBtn);
 
     this.cycleCountdownLabel = new Text({
       x: W - 164 + 70,
@@ -627,7 +756,7 @@ export class ChatRoom extends App {
     const sendX = inputX + inputW + 12;
     const sendY = inputY;
 
-    box.add(new Button({
+    this.sendBtn = new Button({
       x: sendX, y: sendY, w: sendW, h: inputRowH - 16,
       text: "Send",
       fill: "#2a4a2a",
@@ -636,7 +765,8 @@ export class ChatRoom extends App {
       radius: 6,
       textOptions: { font: "bold 18px sans-serif", color: "#ffffff" },
       onClick: () => this._sendMessage(),
-    }));
+    });
+    box.add(this.sendBtn);
 
     this.chatKeyboard   = null;
     this.chatTypeToggle = null;
@@ -789,7 +919,7 @@ export class ChatRoom extends App {
     });
     box.add(this.chatTypeToggle);
 
-    box.add(new Button({
+    this.sendBtn = new Button({
       x: sendX, y: inputY,
       w: btnW, h: inputH,
       text: "Send",
@@ -799,7 +929,8 @@ export class ChatRoom extends App {
       radius: 6,
       textOptions: { font: "bold 18px sans-serif", color: "#ffffff" },
       onClick: () => this._sendMessage(),
-    }));
+    });
+    box.add(this.sendBtn);
 
     const kbY = boxY + boxH + gapAboveKb;
     this.chatKeyboard.x = kbX;
@@ -843,9 +974,16 @@ export class ChatRoom extends App {
       }
     }
 
+    if (name === "room") {
+      this._startRoomListRefresh();
+    } else {
+      this._stopRoomListRefresh();
+    }
+
     this._refreshUsernameField();
     this._refreshChatInput();
     this._refreshCountdown();
+    this._refreshRoomListCountdown();
 
     if (name !== "room" && this.roomStatusLabel) {
       this.roomStatusLabel.text = "";
@@ -886,6 +1024,84 @@ export class ChatRoom extends App {
 
   _clearStatus() {
     this._setStatus("");
+  }
+
+  // ---------- Room-list auto-refresh ----------
+
+  _startRoomListRefresh() {
+    this._stopRoomListRefresh();
+    this._roomListNextAt = Date.now() + ROOMLIST_REFRESH_MS;
+    this._refreshRoomListCountdown();
+    this._roomListTimer = setTimeout(() => this._runRoomListRefreshLoop(), ROOMLIST_REFRESH_MS);
+  }
+
+  _stopRoomListRefresh() {
+    if (this._roomListTimer) {
+      clearTimeout(this._roomListTimer);
+      this._roomListTimer = null;
+    }
+    this._roomListNextAt = 0;
+    this._refreshRoomListCountdown();
+  }
+
+  async _runRoomListRefreshLoop() {
+    // If the room list is no longer visible, stop silently.
+    if (this.stack[this.stack.length - 1] !== "room") {
+      this._stopRoomListRefresh();
+      return;
+    }
+
+    this._roomListNextAt = 0;
+    this._refreshRoomListCountdown();
+
+    try {
+      await this._refreshRoomOccupancy();
+    } catch (e) {
+      // _refreshRoomOccupancy handles its own error status.
+    }
+
+    if (this.stack[this.stack.length - 1] !== "room") {
+      this._stopRoomListRefresh();
+      return;
+    }
+
+    this._roomListNextAt = Date.now() + ROOMLIST_REFRESH_MS;
+    this._refreshRoomListCountdown();
+    this._roomListTimer = setTimeout(() => this._runRoomListRefreshLoop(), ROOMLIST_REFRESH_MS);
+  }
+
+  async _manualUpdateRoomList() {
+    if (this._roomListUpdating) return;
+    if (this.stack[this.stack.length - 1] !== "room") return;
+
+    this._roomListUpdating = true;
+    this._busyStart(this.roomListUpdateBtn);
+
+    // Reset the countdown to a fresh interval now.
+    if (this._roomListTimer) {
+      clearTimeout(this._roomListTimer);
+      this._roomListTimer = null;
+    }
+    this._roomListNextAt = 0;
+    this._refreshRoomListCountdown();
+
+    try {
+      await this._refreshRoomOccupancy();
+    } catch (e) {
+      // _refreshRoomOccupancy handles its own error status.
+    }
+
+    this._busyEnd(this.roomListUpdateBtn);
+    this._roomListUpdating = false;
+
+    if (this.stack[this.stack.length - 1] !== "room") {
+      this._stopRoomListRefresh();
+      return;
+    }
+
+    this._roomListNextAt = Date.now() + ROOMLIST_REFRESH_MS;
+    this._refreshRoomListCountdown();
+    this._roomListTimer = setTimeout(() => this._runRoomListRefreshLoop(), ROOMLIST_REFRESH_MS);
   }
 
   // ---------- Room occupancy ----------
@@ -965,8 +1181,6 @@ export class ChatRoom extends App {
     return Object.assign({ "Content-Type": "application/json" }, this._authHeaders());
   }
 
-  // One request returns the branch tip commit, whose tree sha we
-  // extract. This folds the old ref read and commit read into one.
   async _readCommitByRef() {
     const url = API + "commits/" + encodeURIComponent(BRANCH);
     const res = await fetch(url, { headers: this._authHeaders(), cache: "no-store" });
@@ -1011,18 +1225,12 @@ export class ChatRoom extends App {
     return fromBase64(json.content);
   }
 
-  // Two requests: commit-by-ref, then tree. Returns commit sha, tree
-  // sha, and the entries map.
   async _fetchTreeContext() {
     const c = await this._readCommitByRef();
     const entries = await this._readTreeEntries(c.treeSha);
     return { commitSha: c.commitSha, treeSha: c.treeSha, entries };
   }
 
-  // Read a presence file using an already-fetched entries map.
-  // Returns { content, entries } where entries is the parsed slot
-  // array. content is the raw text (empty string if the file is
-  // missing or empty).
   async _readPresenceFromEntries(ctxEntries, room) {
     const path  = DATA_ROOT + room + "/presence.txt";
     const entry = ctxEntries.get(path);
@@ -1098,14 +1306,6 @@ export class ChatRoom extends App {
     if (!res.ok) throw new Error("PATCH_REF_FAILED_" + res.status);
   }
 
-  // Returns { ok, retried }. ok is true when the write landed. retried
-  // is true if at least one attempt had to loop.
-  //
-  // hint is optional and carries a tree context the caller already
-  // has: { commitSha, treeSha, entries, content }. If the hint's
-  // commitSha matches the live ref, the write path skips the
-  // ref/commit/tree reads and the file-content read. On any hint miss
-  // we fall back to the full read path for that attempt.
   async _writeWithRetry(path, buildContent, message, hint) {
     let lastError = null;
     let retried   = false;
@@ -1276,11 +1476,26 @@ export class ChatRoom extends App {
     return n;
   }
 
+  // Find the first slot in `entries` that is not currently present.
+  // Returns -1 if all slots are present. Used inside the presence-
+  // claim build callback so the slot is decided against the freshest
+  // content, not a pre-read.
+  _firstFreeSlot(entries) {
+    for (let i = 0; i < SLOTS; i++) {
+      const e = entries[i];
+      if (!e || !isPresent(e.iso)) return i;
+    }
+    return -1;
+  }
+
   // ---------- Room join ----------
 
   async _joinRoom(room) {
     if (this._joining) return;
     this._joining = true;
+
+    const pressedBtn = this.roomButtons[room];
+    if (pressedBtn) this._busyStart(pressedBtn);
 
     this._setStatus("Joining " + ROOM_LABELS[room] + "...");
 
@@ -1302,6 +1517,9 @@ export class ChatRoom extends App {
 
       let anyPresent = pres.entries.some(e => e && isPresent(e.iso));
 
+      // If the room looked dead, confirm after a short pause. This
+      // is to avoid resetting a room whose presence file just
+      // happens to be mid-write.
       if (!anyPresent) {
         await this._sleep(DEAD_CONFIRM_MS);
         try {
@@ -1319,65 +1537,28 @@ export class ChatRoom extends App {
         anyPresent = pres.entries.some(e => e && isPresent(e.iso));
       }
 
-      if (!anyPresent) {
+      const roomIsDead = !anyPresent;
+
+      if (roomIsDead) {
         this._setStatus("Resetting dead room...");
-
-        try {
-          await this._writeWithRetry(
-            DATA_ROOT + room + "/log.txt",
-            (cur) => (cur === "" ? null : ""),
-            "reset " + room + " log"
-          );
-        } catch (e) {
-          if (e.message === "BAD_SESSION") {
-            this._handleApiError(e, "reset log");
-            return;
-          }
-        }
-
-        try {
-          await this._writeWithRetry(
-            DATA_ROOT + room + "/presence.txt",
-            (cur) => (cur === "" ? null : this._serializePresence(new Array(SLOTS).fill(null))),
-            "reset " + room + " presence"
-          );
-        } catch (e) {
-          if (e.message === "BAD_SESSION") {
-            this._handleApiError(e, "reset presence");
-            return;
-          }
-        }
-
-        // Refetch because we just committed twice.
-        try {
-          const r = await this._serialize(async () => {
-            const c = await this._fetchTreeContext();
-            const p = await this._readPresenceFromEntries(c.entries, room);
-            return { ctx: c, pres: p };
-          });
-          ctx  = r.ctx;
-          pres = r.pres;
-        } catch (e) {
-          this._handleApiError(e, "read presence after reset");
-          return;
-        }
       }
 
-      let slot = -1;
-      for (let i = 0; i < SLOTS; i++) {
-        const e = pres.entries[i];
-        if (!e || !isPresent(e.iso)) { slot = i; break; }
-      }
-
-      if (slot < 0) {
-        this._setStatus("Room is full.");
-        return;
-      }
-
+      // Claim a slot via the presence-claim callback. The slot is
+      // chosen against the freshest content _writeWithRetry has, so
+      // on a retry it re-reads and takes whatever slot is free. The
+      // callback reports its chosen slot via self._claimedSlot.
+      //
+      // On the dead path, this claim makes us present BEFORE any
+      // reset runs. A second joiner arriving one moment later sees
+      // a live room (our line) and takes another slot. The reset
+      // below then only touches log.txt, which is an idempotent
+      // no-op on an already-empty file.
       const path   = DATA_ROOT + room + "/presence.txt";
       const myIso  = nowIso();
       const myName = this.username;
       const self   = this;
+
+      this._claimedSlot = -1;
 
       const hint = {
         commitSha: ctx.commitSha,
@@ -1392,8 +1573,12 @@ export class ChatRoom extends App {
           this._writeWithRetry(
             path,
             (currentContent) => {
-              const newLine = "slot" + slot + "|" + myName + "|" + myIso;
-              return self._splicePresenceLine(currentContent, slot, newLine);
+              const entries = self._parsePresence(currentContent);
+              const chosen = self._firstFreeSlot(entries);
+              if (chosen < 0) return null;
+              self._claimedSlot = chosen;
+              const newLine = "slot" + chosen + "|" + myName + "|" + myIso;
+              return self._splicePresenceLine(currentContent, chosen, newLine);
             },
             "join " + room,
             hint
@@ -1409,8 +1594,38 @@ export class ChatRoom extends App {
         return;
       }
 
+      if (this._claimedSlot < 0) {
+        // Should not happen: ok:true implies a slot was chosen.
+        // Guard anyway so a silent failure cannot leave this.slot
+        // unset.
+        this._setStatus("Room is full.");
+        return;
+      }
+
+      // We are now present in the room. Only on the dead path do we
+      // reset log.txt. The reset NEVER touches presence.txt, because
+      // our own presence line is our claim.
+      if (roomIsDead) {
+        try {
+          await this._serialize(() =>
+            this._writeWithRetry(
+              DATA_ROOT + room + "/log.txt",
+              (cur) => (cur === "" ? null : ""),
+              "reset " + room + " log"
+            )
+          );
+        } catch (e) {
+          if (e.message === "BAD_SESSION") {
+            this._handleApiError(e, "reset log");
+            return;
+          }
+          // Best-effort. A second joiner's reset may have already
+          // emptied it.
+        }
+      }
+
       this.room        = room;
-      this.slot        = slot;
+      this.slot        = this._claimedSlot;
       this.messages    = [];
       this.seenKeys    = new Set();
       this.users       = [];
@@ -1426,18 +1641,30 @@ export class ChatRoom extends App {
       this._startCycle();
     } finally {
       this._joining = false;
+      if (pressedBtn) this._busyEnd(pressedBtn);
     }
   }
 
   // ---------- Leave ----------
 
   async _leaveRoom() {
-    await this._leaveRoomInternal();
-    while (this.stack.length > 1 && this.stack[this.stack.length - 1] !== "room") {
-      this.stack.pop();
+    if (this._leaving) return;
+    this._leaving = true;
+
+    this._busyStart(this.leaveBtn);
+    this._setStatus("Leaving...");
+
+    try {
+      await this._leaveRoomInternal();
+      while (this.stack.length > 1 && this.stack[this.stack.length - 1] !== "room") {
+        this.stack.pop();
+      }
+      this._applyScreen("room");
+      this._refreshRoomOccupancy();
+    } finally {
+      this._leaving = false;
+      this._busyEnd(this.leaveBtn);
     }
-    this._applyScreen("room");
-    this._refreshRoomOccupancy();
   }
 
   async _leaveRoomInternal() {
@@ -1622,6 +1849,7 @@ export class ChatRoom extends App {
     this._updating   = true;
     this._lastUpdate = now;
     this._setStatus("Updating...");
+    this._busyStart(this.updateBtn);
 
     if (this._cycleTimer) {
       clearTimeout(this._cycleTimer);
@@ -1635,6 +1863,7 @@ export class ChatRoom extends App {
     } catch (e) {
       this._handleApiError(e, "update");
       this._updating = false;
+      this._busyEnd(this.updateBtn);
       if (this.room !== null) {
         this._nextCycleAt = Date.now() + this._cycleDelay;
         this._refreshCountdown();
@@ -1645,6 +1874,7 @@ export class ChatRoom extends App {
 
     this._updating = false;
     this._clearStatus();
+    this._busyEnd(this.updateBtn);
 
     if (this.room !== null) {
       this._nextCycleAt = Date.now() + this._cycleDelay;
@@ -1734,6 +1964,8 @@ export class ChatRoom extends App {
 
     this._sending  = true;
     this._lastSend = now;
+    this._setStatus("Sending...");
+    this._busyStart(this.sendBtn);
 
     const safe = text.replace(/\|/g, "/").replace(/\n/g, " ").replace(/\r/g, " ");
     const iso  = nowIso();
@@ -1778,6 +2010,7 @@ export class ChatRoom extends App {
       setTimeout(() => this._clearStatus(), 3000);
     } finally {
       this._sending = false;
+      this._busyEnd(this.sendBtn);
     }
   }
 
@@ -1845,7 +2078,7 @@ export class ChatRoom extends App {
 
   update(dt) {
     const top = this.stack[this.stack.length - 1];
-    if (top !== "username" && top !== "chat") return;
+    if (top !== "username" && top !== "chat" && top !== "room") return;
 
     this._cursorTimer += dt * 1000;
     if (this._cursorTimer >= CURSOR_MS) {
@@ -1858,6 +2091,10 @@ export class ChatRoom extends App {
 
     if (top === "chat") {
       this._refreshCountdown();
+    }
+
+    if (top === "room") {
+      this._refreshRoomListCountdown();
     }
   }
 }
