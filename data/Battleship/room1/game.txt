@@ -7,7 +7,7 @@ firstMode=
 voteP0=defer
 voteP1=me
 readyP0=1
-readyP1=0
+readyP1=1
 rematchP0=0
 rematchP1=0
 #PLAYER 0
