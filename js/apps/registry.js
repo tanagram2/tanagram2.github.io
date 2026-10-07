@@ -18,7 +18,6 @@ import { SnakeGame }  from "./SnakeGame.js";
 import { Tetris }     from "./Tetris.js";
 import { ChatRoom }   from "./ChatRoom.js";
 import { Battleship } from "./Battleship.js";
-import { Poker }      from "./Poker.js";
 
 export const APPS = [
   Calculator,
@@ -27,5 +26,4 @@ export const APPS = [
   Tetris,
   ChatRoom,
   Battleship,
-  Poker,
 ];
