@@ -10,12 +10,16 @@
 // three-file shape as Battleship: presence.txt, game.txt, chat.txt.
 //
 // Singleplayer uses the same engine with a null transport: state
-// lives in memory, bots step inline.
+// lives in memory, bots step inline with a short think delay.
 //
 // Cycle is 30 seconds. On your turn you have 30 seconds; observing
 // clients auto-fold an unresponsive acting player after 1:30,
 // verified against the game file's own turnStartedIso. Two
 // consecutive auto-folds -> kicked, results recorded.
+//
+// Text entry: every text field is a Button that opens a modal
+// entry panel. One modal at a time. Cursor blink only in the
+// open modal.
 
 import { App }       from "./App.js";
 import { Rect }      from "../primitives/Rect.js";
@@ -46,7 +50,6 @@ const UPDATE_THROTTLE   = 10 * 1000;
 const CHAT_COOLDOWN     = 8 * 1000;
 const PUT_MAX_RETRIES   = 6;
 const PUT_BACKOFF_MS    = 250;
-const DEAD_CONFIRM_MS   = 1000;
 
 const STAGGER_MIN_MS    = 500;
 const STAGGER_MAX_MS    = 3000;
@@ -63,9 +66,15 @@ const API = "https://api.github.com/repos/" + OWNER + "/" + REPO + "/";
 
 const RECONNECT_GRACE_MS = 2 * 60 * 1000;
 
-const TURN_MS       = 30 * 1000;
-const AUTO_FOLD_MS  = 90 * 1000;
+const AUTO_FOLD_MS   = 90 * 1000;
 const AUTO_FOLD_KICK_COUNT = 2;
+
+// Bot think time.
+const BOT_THINK_MIN_MS = 800;
+const BOT_THINK_MAX_MS = 2000;
+
+// Auto-deal next hand delay.
+const NEXT_HAND_DELAY_MS = 5000;
 
 // ---------- Table limits ----------
 
@@ -130,12 +139,10 @@ const TEXT_PRIMARY   = "#eef2f8";
 const TEXT_SECONDARY = "#b8c8e0";
 const TEXT_DIM       = "#8a9ab0";
 const TEXT_TURN      = "#70aaff";
-const TEXT_FEEDBACK  = "#ffcc33";
-const TEXT_HINT      = "#8090a0";
+const TEXT_MONEY     = "#ffd040";
 const TEXT_CHAT      = "#e0e8f0";
 const TEXT_ERROR     = "#ff6060";
 const TEXT_BADGE     = "#ff4040";
-const TEXT_MONEY     = "#ffd040";
 
 const SUIT_RED   = "#c02020";
 const SUIT_BLACK = "#101010";
@@ -146,8 +153,6 @@ const BTN_GREEN_FILL   = "#1f8a3f";
 const BTN_GREEN_STROKE = "#4fd97a";
 const BTN_RED_FILL     = "#c02020";
 const BTN_RED_STROKE   = "#ff5050";
-const BTN_DARK_FILL    = "#3a3a3a";
-const BTN_DARK_STROKE  = "#909090";
 
 const BUSY_FILL   = "#5a5a5a";
 const BUSY_STROKE = "#a8a8a8";
@@ -219,7 +224,7 @@ function truncate(s, n) {
   return s.slice(0, n);
 }
 
-// ---------- Encryption (obfuscation only) ----------
+// ---------- Encryption ----------
 
 function fnv1a32(str) {
   let h = 0x811c9dc5;
@@ -272,7 +277,9 @@ function encField(plaintext, fieldName) {
 
 function decField(blob, fieldName) {
   if (!blob || blob.indexOf(":") < 0) return "";
-  const [salt, hex] = blob.split(":");
+  const parts = blob.split(":");
+  const salt = parts[0];
+  const hex  = parts[1];
   const seed = salt + "|" + fieldName + "|" + CRYPTO_CONST;
   const bytes = new Uint8Array(hex.length / 2);
   for (let i = 0; i < bytes.length; i++) {
@@ -290,14 +297,6 @@ function newDeck() {
   const deck = [];
   for (const s of SUITS) {
     for (const r of RANKS) deck.push(r + s);
-  }
-  return deck;
-}
-
-function shuffleDeck(deck) {
-  for (let i = deck.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    const t = deck[i]; deck[i] = deck[j]; deck[j] = t;
   }
   return deck;
 }
@@ -372,8 +371,6 @@ function bestHand(seven) {
   return best;
 }
 
-// ---------- Chip breakdown ----------
-
 function chipBreakdown(amount) {
   const out = [];
   let rem = Math.max(0, Math.round(amount));
@@ -404,26 +401,30 @@ export class Poker extends App {
 
     this.stack = ["login"];
 
-    // Login screen state.
+    // Login screen values (kept even though entry is via modal).
     this.loginUsername = "";
     this.loginPassword = "";
     this.loginError    = "";
-    this.loginField    = "username";
 
-    // Create-account screen state.
+    // Create-account values.
     this.createUsername = "";
     this.createPassword = "";
     this.createEmail    = "";
-    this.createField    = "username";
-    this.createUsernameState = "empty";
+    this.createUsernameState = "empty";   // "empty" | "checking" | "taken" | "available"
     this.createError    = "";
-    this._createCheckTimer = null;
 
-    // Options screen state.
+    // Modal entry state.
+    this.entryOpen    = false;
+    this.entryTarget  = null;      // "loginUsername" | "loginPassword" | "createUsername" | "createPassword" | "createEmail" | "displayName"
+    this.entryBuffer  = "";
+    this.entryTitle   = "";
+    this.entryPassword = false;
+    this._entryCheckPromise = null;
+
+    // Options.
     this.optionsField = null;
-    this.displayNameBuffer = "";
 
-    // Balance screen state.
+    // Balance.
     this.balancePendingBuy = 0;
 
     // Table state.
@@ -436,13 +437,15 @@ export class Poker extends App {
     this.chatLines    = [];
     this.spTierChoice = null;
 
-    // Reconnect offer.
     this.reconnectOffer = null;
 
-    // Cycle scheduling.
-    this._cycleTimer  = null;
-    this._cycleDelay  = CYCLE_MS;
-    this._nextCycleAt = 0;
+    // Schedulers.
+    this._cycleTimer     = null;
+    this._cycleDelay     = CYCLE_MS;
+    this._nextCycleAt    = 0;
+
+    this._botTimer       = null;
+    this._nextHandTimer  = null;
 
     this._lastUpdate = 0;
     this._lastSend   = 0;
@@ -497,6 +500,10 @@ export class Poker extends App {
     this.root.add(this.mpRoomScreen);
     this.root.add(this.tableScreen);
 
+    // Modal entry overlay - built last so it draws on top.
+    this._entryOverlay = this._buildEntryOverlay();
+    this.root.add(this._entryOverlay);
+
     this._applyScreen("login");
     this._refreshAllFields();
 
@@ -522,15 +529,13 @@ export class Poker extends App {
     } catch (e) {}
   }
 
-  // ---------- Serialized op runner ----------
+  // ---------- Serialize ----------
 
   _serialize(fn) {
     const next = this._opChain.then(fn, fn);
     this._opChain = next.catch(() => {});
     return next;
   }
-
-  // ---------- Busy-button helpers ----------
 
   _busyStart(btn) {
     if (!btn || !btn.self) return;
@@ -543,6 +548,10 @@ export class Poker extends App {
     if (!btn || !btn.self) return;
     btn.setBusy(false);
     btn.setBaseStyle({});
+  }
+
+  _sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
   }
 
   // =================================================================
@@ -900,16 +909,16 @@ export class Poker extends App {
     const name = this._loadPersistedUser();
     if (!name) return;
     try {
-      const { accounts } = await this._readAccounts();
-      const acc = this._findAccount(accounts, name);
+      const r = await this._readAccounts();
+      const acc = this._findAccount(r.accounts, name);
       if (!acc) { this._savePersistedUser(""); return; }
-      this._finishLogin(acc, accounts);
+      this._finishLogin(acc);
     } catch (e) {
       // Silent.
     }
   }
 
-  _finishLogin(acc, accounts) {
+  _finishLogin(acc) {
     this.account = acc;
     this._savePersistedUser(acc.username);
 
@@ -937,41 +946,8 @@ export class Poker extends App {
 
   // ---------- Create account ----------
 
-  _scheduleUsernameCheck() {
-    if (this._createCheckTimer) {
-      clearTimeout(this._createCheckTimer);
-      this._createCheckTimer = null;
-    }
-    const name = this.createUsername.trim();
-    if (!name) {
-      this.createUsernameState = "empty";
-      this._refreshCreateScreen();
-      return;
-    }
-    this.createUsernameState = "checking";
-    this._refreshCreateScreen();
-
-    const self = this;
-    this._createCheckTimer = setTimeout(() => {
-      self._createCheckTimer = null;
-      self._doUsernameCheck(name);
-    }, 400);
-  }
-
-  async _doUsernameCheck(name) {
-    try {
-      const { accounts } = await this._readAccounts();
-      if (this.createUsername.trim() !== name) return;
-      const taken = !!this._findAccount(accounts, name);
-      this.createUsernameState = taken ? "taken" : "available";
-    } catch (e) {
-      this.createUsernameState = "empty";
-    }
-    this._refreshCreateScreen();
-  }
-
   _canCreateAccount() {
-    return this.createUsername.trim().length > 0
+    return this.createUsername.length > 0
         && this.createPassword.length > 0
         && this.createUsernameState === "available";
   }
@@ -984,9 +960,9 @@ export class Poker extends App {
     this.createError = "";
     this._refreshCreateScreen();
 
-    const name  = this.createUsername.trim();
+    const name  = this.createUsername;
     const pw    = this.createPassword;
-    const email = this.createEmail.trim();
+    const email = this.createEmail;
 
     try {
       let created = null;
@@ -1026,34 +1002,20 @@ export class Poker extends App {
         return;
       }
 
-      this._resetCreateScreen();
-      this._finishLogin(created, null);
-      this.stack = ["menu"];
-      this._applyScreen("menu");
-      this._refreshAllFields();
-      this._refreshMenuLabels();
+      this.createUsername = "";
+      this.createPassword = "";
+      this.createEmail    = "";
+      this.createUsernameState = "empty";
+      this.createError    = "";
+
+      this._finishLogin(created);
     } catch (e) {
-      if (e && e.message === "BAD_SESSION") {
-        this.createError = "Session unavailable.";
-      } else {
-        this.createError = "Create failed. Try again.";
-      }
+      this.createError = (e && e.message === "BAD_SESSION")
+        ? "Session unavailable."
+        : "Create failed. Try again.";
     } finally {
       this._creating = false;
       this._refreshCreateScreen();
-    }
-  }
-
-  _resetCreateScreen() {
-    this.createUsername = "";
-    this.createPassword = "";
-    this.createEmail    = "";
-    this.createField    = "username";
-    this.createUsernameState = "empty";
-    this.createError    = "";
-    if (this._createCheckTimer) {
-      clearTimeout(this._createCheckTimer);
-      this._createCheckTimer = null;
     }
   }
 
@@ -1061,8 +1023,7 @@ export class Poker extends App {
 
   async _submitLogin() {
     if (this._loggingIn) return;
-    const name = this.loginUsername.trim();
-    if (!name || !this.loginPassword) {
+    if (!this.loginUsername || !this.loginPassword) {
       this.loginError = "Enter username and password.";
       this._refreshLoginScreen();
       return;
@@ -1073,15 +1034,15 @@ export class Poker extends App {
     this._refreshLoginScreen();
 
     try {
-      const { accounts } = await this._readAccounts();
-      const acc = this._findAccount(accounts, name);
+      const r = await this._readAccounts();
+      const acc = this._findAccount(r.accounts, this.loginUsername);
       if (!acc || acc.password !== this.loginPassword) {
         this.loginError = "Invalid username or password.";
         return;
       }
       this.loginUsername = "";
       this.loginPassword = "";
-      this._finishLogin(acc, accounts);
+      this._finishLogin(acc);
     } catch (e) {
       this.loginError = (e && e.message === "BAD_SESSION")
         ? "Session unavailable."
@@ -1144,10 +1105,6 @@ export class Poker extends App {
     }
   }
 
-  _sleep(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms));
-  }
-
   // =================================================================
   // Screen plumbing.
   // =================================================================
@@ -1167,7 +1124,13 @@ export class Poker extends App {
     this._cursorOn    = true;
     this._cursorTimer = 0;
 
-    if (name !== "table") this._stopCycle();
+    if (name !== "table") {
+      this._stopCycle();
+      this._cancelBotTimer();
+      this._cancelNextHandTimer();
+    }
+
+    this._closeEntry();
   }
 
   _pushScreen(name) {
@@ -1200,6 +1163,233 @@ export class Poker extends App {
   }
 
   // =================================================================
+  // Modal entry overlay.
+  // =================================================================
+
+  _buildEntryOverlay() {
+    const W = Viewport.width;
+    const H = Viewport.height;
+    const mob = this.mobile;
+
+    const ov = new Panel({
+      x: 0, y: 0, w: "100%", h: "100%",
+      self: new Rect({ fill: "rgba(0,0,0,0.65)", stroke: null }),
+    });
+    ov.visible = false;
+
+    const bw = mob ? W - 80 : 620;
+    const bh = mob ? 300 : 260;
+    const bx = (W - bw) / 2;
+    const by = (H - bh) / 2;
+
+    const box = new Panel({
+      x: bx, y: by, w: bw, h: bh,
+      fill: BG_PANEL, stroke: STROKE_PANEL, strokeWidth: 3, radius: 12,
+    });
+    ov.add(box);
+
+    this.entryTitleLabel = new Text({
+      x: bw / 2, y: 30,
+      text: "",
+      font: mob ? "bold 24px sans-serif" : "bold 22px sans-serif",
+      color: TEXT_PRIMARY, align: "center", baseline: "middle",
+    });
+    box.add(this.entryTitleLabel);
+
+    const fieldW = bw - 60;
+    const fieldH = mob ? 64 : 52;
+    const fieldX = (bw - fieldW) / 2;
+    const fieldY = 70;
+
+    const fieldPanel = new Panel({
+      x: fieldX, y: fieldY, w: fieldW, h: fieldH,
+      fill: "#0a1018", stroke: "#3a4d70", strokeWidth: 2, radius: 6,
+    });
+    box.add(fieldPanel);
+
+    this.entryValueLabel = new Label({
+      x: 0, y: 0, w: "100%", h: "100%",
+      text: "",
+      textOptions: {
+        font: mob ? "22px monospace" : "20px monospace",
+        color: TEXT_PRIMARY, align: "left", baseline: "middle",
+      },
+    });
+    this.entryValueLabel.text.x = 14;
+    this.entryValueLabel.text.y = "50%";
+    fieldPanel.add(this.entryValueLabel);
+
+    this.entryHintLabel = new Text({
+      x: bw / 2, y: fieldY + fieldH + 20,
+      text: "",
+      font: mob ? "16px monospace" : "14px monospace",
+      color: TEXT_SECONDARY, align: "center", baseline: "middle",
+    });
+    box.add(this.entryHintLabel);
+
+    const cW = mob ? 200 : 160;
+    const cH = mob ? 60 : 52;
+    const cGap = 16;
+    const totalCW = cW * 2 + cGap;
+    const cX0 = (bw - totalCW) / 2;
+    const cY = bh - cH - 20;
+
+    this.entryConfirmBtn = new Button({
+      x: cX0, y: cY, w: cW, h: cH,
+      text: "Confirm",
+      fill: BTN_GREEN_FILL, stroke: BTN_GREEN_STROKE, strokeWidth: 2, radius: 8,
+      textOptions: { font: mob ? "bold 22px sans-serif" : "bold 20px sans-serif", color: "#ffffff" },
+      onClick: () => this._confirmEntry(),
+    });
+    box.add(this.entryConfirmBtn);
+
+    this.entryCancelBtn = new Button({
+      x: cX0 + cW + cGap, y: cY, w: cW, h: cH,
+      text: "Cancel",
+      fill: BTN_RED_FILL, stroke: BTN_RED_STROKE, strokeWidth: 2, radius: 8,
+      textOptions: { font: mob ? "bold 22px sans-serif" : "bold 20px sans-serif", color: "#ffffff" },
+      onClick: () => this._closeEntry(),
+    });
+    box.add(this.entryCancelBtn);
+
+    // Optional on-canvas keyboard (mobile).
+    if (mob) {
+      const kbW = W - 80;
+      const kbH_guess = 200;
+      const kbY = by + bh + 20;
+      const kbH_avail = H - kbY - 10;
+      if (kbH_avail >= kbH_guess) {
+        this.entryKeyboard = new Keyboard({
+          x: 40, y: kbY, w: kbW,
+          onKey: (ch) => this._handleEntryKey({ key: ch, length: 1 }),
+        });
+        ov.add(this.entryKeyboard);
+      } else {
+        this.entryKeyboard = null;
+      }
+    } else {
+      this.entryKeyboard = null;
+    }
+
+    return ov;
+  }
+
+  _openEntry(target, title, password) {
+    this.entryOpen     = true;
+    this.entryTarget   = target;
+    this.entryTitle    = title;
+    this.entryPassword = !!password;
+    this.entryBuffer   = "";
+    this.entryHintLabel.text = "";
+    this._entryOverlay.visible = true;
+    this._cursorOn    = true;
+    this._cursorTimer = 0;
+    this._refreshEntry();
+  }
+
+  _closeEntry() {
+    this.entryOpen   = false;
+    this.entryTarget = null;
+    this.entryBuffer = "";
+    if (this._entryOverlay) this._entryOverlay.visible = false;
+  }
+
+  _refreshEntry() {
+    if (!this.entryOpen) return;
+    if (this.entryTitleLabel) this.entryTitleLabel.text = this.entryTitle;
+    if (this.entryPassword) {
+      this._renderPasswordField(this.entryValueLabel, this.entryBuffer);
+    } else {
+      this._renderField(this.entryValueLabel, this.entryBuffer);
+    }
+  }
+
+  _handleEntryKey(e) {
+    if (!this.entryOpen) return;
+    const k = e.key;
+    if (k === "Backspace") {
+      this.entryBuffer = this.entryBuffer.slice(0, -1);
+      this._refreshEntry();
+      return;
+    }
+    if (k === "Enter")   { this._confirmEntry(); return; }
+    if (k === "Escape")  { this._closeEntry();   return; }
+    if (k.length === 1) {
+      this.entryBuffer += k;
+      this._refreshEntry();
+    }
+  }
+
+  async _confirmEntry() {
+    const v = this.entryBuffer;
+    const target = this.entryTarget;
+    if (!target) { this._closeEntry(); return; }
+
+    if (target === "loginUsername") {
+      this.loginUsername = v;
+      this.loginError    = "";
+      this._closeEntry();
+      this._refreshLoginScreen();
+      return;
+    }
+
+    if (target === "loginPassword") {
+      this.loginPassword = v;
+      this.loginError    = "";
+      this._closeEntry();
+      this._refreshLoginScreen();
+      return;
+    }
+
+    if (target === "createUsername") {
+      if (!v) { this.entryHintLabel.text = "Cannot be empty."; return; }
+      this.entryHintLabel.text = "Checking...";
+      let taken = false;
+      try {
+        const r = await this._readAccounts();
+        taken = !!this._findAccount(r.accounts, v);
+      } catch (e) {
+        this.entryHintLabel.text = "Check failed. Try again.";
+        return;
+      }
+      if (taken) {
+        this.entryHintLabel.text = "That username is taken.";
+        this.createUsernameState = "taken";
+        return;
+      }
+      this.createUsername = v;
+      this.createUsernameState = "available";
+      this._closeEntry();
+      this._refreshCreateScreen();
+      return;
+    }
+
+    if (target === "createPassword") {
+      if (!v) { this.entryHintLabel.text = "Cannot be empty."; return; }
+      this.createPassword = v;
+      this._closeEntry();
+      this._refreshCreateScreen();
+      return;
+    }
+
+    if (target === "createEmail") {
+      this.createEmail = v;
+      this._closeEntry();
+      this._refreshCreateScreen();
+      return;
+    }
+
+    if (target === "displayName") {
+      if (!v) { this.entryHintLabel.text = "Cannot be empty."; return; }
+      this._closeEntry();
+      await this._saveDisplayName(v);
+      return;
+    }
+
+    this._closeEntry();
+  }
+
+  // =================================================================
   // Login screen.
   // =================================================================
 
@@ -1229,7 +1419,7 @@ export class Poker extends App {
     }));
 
     const boxW = mob ? W - 80 : 540;
-    const boxH = mob ? 520 : 420;
+    const boxH = mob ? 480 : 420;
     const boxX = (W - boxW) / 2;
     const boxY = mob ? 200 : 170;
 
@@ -1247,54 +1437,42 @@ export class Poker extends App {
     }));
 
     const fieldH = mob ? 60 : 48;
-    const fieldLabelX = 20;
-    const fieldX = mob ? 180 : 170;
-    const fieldW = boxW - fieldX - 20;
     const row1Y = mob ? 80 : 70;
-    const row2Y = row1Y + fieldH + 20;
+    const row2Y = row1Y + fieldH + 16;
+    const labelW = mob ? 140 : 130;
 
     box.add(new Text({
-      x: fieldLabelX, y: row1Y + fieldH / 2,
+      x: 20, y: row1Y + fieldH / 2,
       text: "Username:",
       font: mob ? "bold 22px sans-serif" : "bold 18px sans-serif",
       color: "#101820", align: "left", baseline: "middle",
     }));
-    const uPanel = new Panel({
-      x: fieldX, y: row1Y, w: fieldW, h: fieldH,
+    this.loginUsernameBtn = new Button({
+      x: labelW, y: row1Y, w: boxW - labelW - 20, h: fieldH,
+      text: "(click to enter)",
       fill: "#ffffff", stroke: "#000000", strokeWidth: 2, radius: 4,
+      textOptions: { font: mob ? "20px monospace" : "18px monospace", color: "#101820" },
+      onClick: () => this._openEntry("loginUsername", "Enter Username", false),
     });
-    box.add(uPanel);
-    this.loginUsernameLabel = new Label({
-      x: 0, y: 0, w: "100%", h: "100%",
-      text: "",
-      textOptions: { font: mob ? "20px monospace" : "18px monospace", color: "#101820", align: "left", baseline: "middle" },
-    });
-    this.loginUsernameLabel.text.x = 10;
-    this.loginUsernameLabel.text.y = "50%";
-    uPanel.add(this.loginUsernameLabel);
+    box.add(this.loginUsernameBtn);
 
     box.add(new Text({
-      x: fieldLabelX, y: row2Y + fieldH / 2,
+      x: 20, y: row2Y + fieldH / 2,
       text: "Password:",
       font: mob ? "bold 22px sans-serif" : "bold 18px sans-serif",
       color: "#101820", align: "left", baseline: "middle",
     }));
-    const pPanel = new Panel({
-      x: fieldX, y: row2Y, w: fieldW, h: fieldH,
+    this.loginPasswordBtn = new Button({
+      x: labelW, y: row2Y, w: boxW - labelW - 20, h: fieldH,
+      text: "(click to enter)",
       fill: "#ffffff", stroke: "#000000", strokeWidth: 2, radius: 4,
+      textOptions: { font: mob ? "20px monospace" : "18px monospace", color: "#101820" },
+      onClick: () => this._openEntry("loginPassword", "Enter Password", true),
     });
-    box.add(pPanel);
-    this.loginPasswordLabel = new Label({
-      x: 0, y: 0, w: "100%", h: "100%",
-      text: "",
-      textOptions: { font: mob ? "20px monospace" : "18px monospace", color: "#101820", align: "left", baseline: "middle" },
-    });
-    this.loginPasswordLabel.text.x = 10;
-    this.loginPasswordLabel.text.y = "50%";
-    pPanel.add(this.loginPasswordLabel);
+    box.add(this.loginPasswordBtn);
 
     this.loginErrorLabel = new Text({
-      x: boxW / 2, y: row2Y + fieldH + 26,
+      x: boxW / 2, y: row2Y + fieldH + 24,
       text: "",
       font: mob ? "16px monospace" : "14px monospace",
       color: "#c02020", align: "center", baseline: "middle",
@@ -1316,28 +1494,31 @@ export class Poker extends App {
     });
     box.add(this.loginBtn);
 
-    this.createAccountBtn = new Button({
+    box.add(new Button({
       x: btnX, y: btnY2, w: btnW, h: btnH,
       text: "Create Account",
       fill: "#7ec8e8", stroke: "#2a4a80", strokeWidth: 2, radius: 10,
       textOptions: { font: mob ? "bold 22px sans-serif" : "bold 18px sans-serif", color: "#101820" },
       onClick: () => {
-        this._resetCreateScreen();
+        this.createUsername = "";
+        this.createPassword = "";
+        this.createEmail    = "";
+        this.createUsernameState = "empty";
+        this.createError    = "";
         this._pushScreen("create");
         this._refreshCreateScreen();
       },
-    });
-    box.add(this.createAccountBtn);
+    }));
 
     box.add(new Text({
-      x: boxW / 2, y: btnY2 + btnH + 34,
+      x: boxW / 2, y: btnY2 + btnH + 26,
       text: "Forgot password?",
       font: mob ? "bold 18px sans-serif" : "16px sans-serif",
       color: "#101820", align: "center", baseline: "middle",
     }));
 
     box.add(new Button({
-      x: (boxW - 180) / 2, y: btnY2 + btnH + 54, w: 180, h: mob ? 44 : 36,
+      x: (boxW - 180) / 2, y: btnY2 + btnH + 46, w: 180, h: mob ? 44 : 36,
       text: "Reset password",
       fill: "#a8e0e8", stroke: "#2a4a80", strokeWidth: 1, radius: 6,
       textOptions: { font: mob ? "bold 16px sans-serif" : "14px sans-serif", color: "#101820" },
@@ -1347,52 +1528,21 @@ export class Poker extends App {
       },
     }));
 
-    if (mob) {
-      const kbY = boxY + boxH + 20;
-      this.loginKeyboard = new Keyboard({
-        x: 40, y: kbY, w: W - 80,
-        onKey: (ch) => this._handleLoginKey({ key: ch, length: 1 }),
-      });
-      screen.add(this.loginKeyboard);
-      const kbH = this.loginKeyboard.h;
-      if (kbY + kbH > H - 10) {
-        const needed = kbY + kbH + 10 - H;
-        box.y = boxY - needed;
-      }
-    } else {
-      this.loginKeyboard = null;
-    }
-
     return screen;
   }
 
   _refreshLoginScreen() {
-    this._renderField(this.loginUsernameLabel, this.loginUsername);
-    this._renderPasswordField(this.loginPasswordLabel, this.loginPassword);
+    if (this.loginUsernameBtn) {
+      this.loginUsernameBtn.setText(this.loginUsername || "(click to enter)");
+    }
+    if (this.loginPasswordBtn) {
+      const stars = "*".repeat(this.loginPassword.length);
+      this.loginPasswordBtn.setText(stars || "(click to enter)");
+    }
     if (this.loginErrorLabel) this.loginErrorLabel.text = this.loginError || "";
     if (this.loginBtn) {
       if (this._loggingIn) this._busyStart(this.loginBtn);
       else this._busyEnd(this.loginBtn);
-    }
-  }
-
-  _handleLoginKey(e) {
-    const k = e.key;
-    if (k === "Tab") {
-      this.loginField = this.loginField === "username" ? "password" : "username";
-      return;
-    }
-    if (k === "Backspace") {
-      if (this.loginField === "password") this.loginPassword = this.loginPassword.slice(0, -1);
-      else this.loginUsername = this.loginUsername.slice(0, -1);
-      this._refreshLoginScreen();
-      return;
-    }
-    if (k === "Enter") { this._submitLogin(); return; }
-    if (k.length === 1) {
-      if (this.loginField === "password") this.loginPassword += k;
-      else this.loginUsername += k;
-      this._refreshLoginScreen();
     }
   }
 
@@ -1415,7 +1565,14 @@ export class Poker extends App {
       text: "Return",
       fill: BTN_RED_FILL, stroke: BTN_RED_STROKE, strokeWidth: 2, radius: 8,
       textOptions: { font: "bold 18px sans-serif", color: "#ffffff" },
-      onClick: () => { this._resetCreateScreen(); this._popScreen(); },
+      onClick: () => {
+        this.createUsername = "";
+        this.createPassword = "";
+        this.createEmail    = "";
+        this.createUsernameState = "empty";
+        this.createError    = "";
+        this._popScreen();
+      },
     }));
 
     screen.add(new Text({
@@ -1426,7 +1583,7 @@ export class Poker extends App {
     }));
 
     const boxW = mob ? W - 80 : 620;
-    const boxH = mob ? 640 : 520;
+    const boxH = mob ? 600 : 500;
     const boxX = (W - boxW) / 2;
     const boxY = mob ? 190 : 160;
 
@@ -1444,89 +1601,64 @@ export class Poker extends App {
     }));
 
     const fieldH = mob ? 56 : 44;
-    const fieldLabelX = 20;
-    const fieldX = mob ? 180 : 170;
-    const fieldW = boxW - fieldX - 20;
+    const labelW = mob ? 180 : 170;
     const row1Y = mob ? 76 : 68;
     const row2Y = row1Y + fieldH + 16;
     const row3Y = row2Y + fieldH + 16;
 
     box.add(new Text({
-      x: fieldLabelX, y: row1Y + fieldH / 2,
+      x: 20, y: row1Y + fieldH / 2,
       text: "Username:",
       font: mob ? "bold 22px sans-serif" : "bold 18px sans-serif",
       color: "#101820", align: "left", baseline: "middle",
     }));
-    const uPanel = new Panel({
-      x: fieldX, y: row1Y, w: fieldW, h: fieldH,
+    this.createUsernameBtn = new Button({
+      x: labelW, y: row1Y, w: boxW - labelW - 20, h: fieldH,
+      text: "(click to enter)",
       fill: "#ffffff", stroke: "#000000", strokeWidth: 2, radius: 4,
+      textOptions: { font: mob ? "20px monospace" : "18px monospace", color: "#101820" },
+      onClick: () => this._openEntry("createUsername", "Enter Username", false),
     });
-    box.add(uPanel);
-    this.createUsernameLabel = new Label({
-      x: 0, y: 0, w: "100%", h: "100%",
-      text: "",
-      textOptions: { font: mob ? "20px monospace" : "18px monospace", color: "#101820", align: "left", baseline: "middle" },
-    });
-    this.createUsernameLabel.text.x = 10;
-    this.createUsernameLabel.text.y = "50%";
-    uPanel.add(this.createUsernameLabel);
-
-    this.createUsernameHint = new Text({
-      x: fieldX + fieldW, y: row1Y + fieldH + 6,
-      text: "",
-      font: mob ? "16px monospace" : "14px monospace",
-      color: "#c02020", align: "right", baseline: "top",
-    });
-    box.add(this.createUsernameHint);
+    box.add(this.createUsernameBtn);
 
     box.add(new Text({
-      x: fieldLabelX, y: row2Y + fieldH / 2,
+      x: 20, y: row2Y + fieldH / 2,
       text: "Password:",
       font: mob ? "bold 22px sans-serif" : "bold 18px sans-serif",
       color: "#101820", align: "left", baseline: "middle",
     }));
-    const pPanel = new Panel({
-      x: fieldX, y: row2Y, w: fieldW, h: fieldH,
+    this.createPasswordBtn = new Button({
+      x: labelW, y: row2Y, w: boxW - labelW - 20, h: fieldH,
+      text: "(click to enter)",
       fill: "#ffffff", stroke: "#000000", strokeWidth: 2, radius: 4,
+      textOptions: { font: mob ? "20px monospace" : "18px monospace", color: "#101820" },
+      onClick: () => this._openEntry("createPassword", "Enter Password", true),
     });
-    box.add(pPanel);
-    this.createPasswordLabel = new Label({
-      x: 0, y: 0, w: "100%", h: "100%",
-      text: "",
-      textOptions: { font: mob ? "20px monospace" : "18px monospace", color: "#101820", align: "left", baseline: "middle" },
-    });
-    this.createPasswordLabel.text.x = 10;
-    this.createPasswordLabel.text.y = "50%";
-    pPanel.add(this.createPasswordLabel);
+    box.add(this.createPasswordBtn);
 
     box.add(new Text({
-      x: fieldLabelX, y: row3Y + fieldH / 2,
+      x: 20, y: row3Y + fieldH / 2,
       text: "Email (optional):",
       font: mob ? "bold 18px sans-serif" : "bold 16px sans-serif",
       color: "#101820", align: "left", baseline: "middle",
     }));
-    const ePanel = new Panel({
-      x: fieldX, y: row3Y, w: fieldW, h: fieldH,
+    this.createEmailBtn = new Button({
+      x: labelW, y: row3Y, w: boxW - labelW - 20, h: fieldH,
+      text: "(click to enter)",
       fill: "#ffffff", stroke: "#000000", strokeWidth: 2, radius: 4,
+      textOptions: { font: mob ? "20px monospace" : "18px monospace", color: "#101820" },
+      onClick: () => this._openEntry("createEmail", "Enter Email (optional)", false),
     });
-    box.add(ePanel);
-    this.createEmailLabel = new Label({
-      x: 0, y: 0, w: "100%", h: "100%",
-      text: "",
-      textOptions: { font: mob ? "20px monospace" : "18px monospace", color: "#101820", align: "left", baseline: "middle" },
-    });
-    this.createEmailLabel.text.x = 10;
-    this.createEmailLabel.text.y = "50%";
-    ePanel.add(this.createEmailLabel);
+    box.add(this.createEmailBtn);
 
     box.add(new Text({
-      x: fieldX + 4, y: row3Y + fieldH + 6,
+      x: labelW + 4, y: row3Y + fieldH + 6,
       text: "Note: if you want your account to be recoverable,",
       font: mob ? "13px sans-serif" : "12px sans-serif",
       color: "#101820", align: "left", baseline: "top",
     }));
     box.add(new Text({
-      x: fieldX + 4, y: row3Y + fieldH + 22,
+      x: labelW + 4, y: row3Y + fieldH + 22,
       text: "provide an email address now.",
       font: mob ? "13px sans-serif" : "12px sans-serif",
       color: "#101820", align: "left", baseline: "top",
@@ -1568,42 +1700,26 @@ export class Poker extends App {
     });
     box.add(this.createSubmitBtn);
 
-    if (mob) {
-      const kbY = boxY + boxH + 20;
-      this.createKeyboard = new Keyboard({
-        x: 40, y: kbY, w: W - 80,
-        onKey: (ch) => this._handleCreateKey({ key: ch, length: 1 }),
-      });
-      screen.add(this.createKeyboard);
-      const kbH = this.createKeyboard.h;
-      if (kbY + kbH > H - 10) {
-        const needed = kbY + kbH + 10 - H;
-        box.y = boxY - needed;
-      }
-    } else {
-      this.createKeyboard = null;
-    }
-
     return screen;
   }
 
   _refreshCreateScreen() {
-    this._renderField(this.createUsernameLabel, this.createUsername);
-    this._renderPasswordField(this.createPasswordLabel, this.createPassword);
-    this._renderField(this.createEmailLabel, this.createEmail);
-    if (this.createUsernameHint) {
+    if (this.createUsernameBtn) {
+      this.createUsernameBtn.setText(this.createUsername || "(click to enter)");
       if (this.createUsernameState === "available") {
-        this.createUsernameHint.text = "available";
-        this.createUsernameHint.color = "#1f8a3f";
+        this.createUsernameBtn.setBaseStyle({ fill: "#c8f0c8", stroke: "#2a8a2a" });
       } else if (this.createUsernameState === "taken") {
-        this.createUsernameHint.text = "taken";
-        this.createUsernameHint.color = "#c02020";
-      } else if (this.createUsernameState === "checking") {
-        this.createUsernameHint.text = "checking...";
-        this.createUsernameHint.color = "#606060";
+        this.createUsernameBtn.setBaseStyle({ fill: "#f0c8c8", stroke: "#8a2020" });
       } else {
-        this.createUsernameHint.text = "";
+        this.createUsernameBtn.setBaseStyle({ fill: "#ffffff", stroke: "#000000" });
       }
+    }
+    if (this.createPasswordBtn) {
+      const stars = "*".repeat(this.createPassword.length);
+      this.createPasswordBtn.setText(stars || "(click to enter)");
+    }
+    if (this.createEmailBtn) {
+      this.createEmailBtn.setText(this.createEmail || "(click to enter)");
     }
     if (this.createErrorLabel) this.createErrorLabel.text = this.createError || "";
 
@@ -1617,40 +1733,6 @@ export class Poker extends App {
       } else {
         this._busyEnd(this.createSubmitBtn);
       }
-    }
-  }
-
-  _handleCreateKey(e) {
-    const k = e.key;
-    if (k === "Tab") {
-      if (this.createField === "username") this.createField = "password";
-      else if (this.createField === "password") this.createField = "email";
-      else this.createField = "username";
-      return;
-    }
-    if (k === "Backspace") {
-      if (this.createField === "username") {
-        this.createUsername = this.createUsername.slice(0, -1);
-        this._scheduleUsernameCheck();
-      } else if (this.createField === "password") {
-        this.createPassword = this.createPassword.slice(0, -1);
-      } else {
-        this.createEmail = this.createEmail.slice(0, -1);
-      }
-      this._refreshCreateScreen();
-      return;
-    }
-    if (k === "Enter") { this._submitCreateAccount(); return; }
-    if (k.length === 1) {
-      if (this.createField === "username") {
-        this.createUsername += k;
-        this._scheduleUsernameCheck();
-      } else if (this.createField === "password") {
-        this.createPassword += k;
-      } else {
-        this.createEmail += k;
-      }
-      this._refreshCreateScreen();
     }
   }
 
@@ -1780,7 +1862,7 @@ export class Poker extends App {
     }));
 
     const boxW = mob ? W - 80 : 540;
-    const boxH = mob ? 460 : 340;
+    const boxH = mob ? 420 : 300;
     const boxX = (W - boxW) / 2;
     const boxY = mob ? 210 : 170;
 
@@ -1808,7 +1890,7 @@ export class Poker extends App {
       text: "",
       fill: "#7ec8e8", stroke: "#2a4a80", strokeWidth: 2, radius: 10,
       textOptions: { font: mob ? "bold 22px sans-serif" : "bold 20px sans-serif", color: "#101820" },
-      onClick: () => this._toggleDisplayNameEdit(),
+      onClick: () => this._openEntry("displayName", "Enter New Display Name", false),
     });
     box.add(this.displayNameBtn);
     y += btnH + 16;
@@ -1843,65 +1925,6 @@ export class Poker extends App {
     });
     box.add(this.optionsErrorLabel);
 
-    const editY = boxY + boxH + 20;
-    this.displayNameEdit = new Panel({
-      x: boxX, y: editY, w: boxW, h: mob ? 200 : 160,
-      fill: "#101820", stroke: "#4a9aff", strokeWidth: 3, radius: 10,
-    });
-    this.displayNameEdit.visible = false;
-    screen.add(this.displayNameEdit);
-
-    this.displayNameEdit.add(new Text({
-      x: boxW / 2, y: 24,
-      text: "New display name:",
-      font: mob ? "bold 20px sans-serif" : "bold 18px sans-serif",
-      color: TEXT_PRIMARY, align: "center", baseline: "middle",
-    }));
-
-    const fPanel = new Panel({
-      x: 20, y: 60, w: boxW - 40, h: mob ? 56 : 48,
-      fill: "#0a1018", stroke: "#3a4d70", strokeWidth: 2, radius: 4,
-    });
-    this.displayNameEdit.add(fPanel);
-    this.displayNameEditLabel = new Label({
-      x: 0, y: 0, w: "100%", h: "100%",
-      text: "",
-      textOptions: { font: mob ? "20px monospace" : "18px monospace", color: TEXT_PRIMARY, align: "left", baseline: "middle" },
-    });
-    this.displayNameEditLabel.text.x = 10;
-    this.displayNameEditLabel.text.y = "50%";
-    fPanel.add(this.displayNameEditLabel);
-
-    const ebW = 180, ebH = mob ? 52 : 44;
-    this.displayNameSaveBtn = new Button({
-      x: boxW / 2 - ebW - 10, y: mob ? 130 : 118, w: ebW, h: ebH,
-      text: "Save",
-      fill: BTN_GREEN_FILL, stroke: BTN_GREEN_STROKE, strokeWidth: 2, radius: 8,
-      textOptions: { font: mob ? "bold 22px sans-serif" : "bold 18px sans-serif", color: "#ffffff" },
-      onClick: () => this._saveDisplayName(),
-    });
-    this.displayNameEdit.add(this.displayNameSaveBtn);
-
-    this.displayNameCancelBtn = new Button({
-      x: boxW / 2 + 10, y: mob ? 130 : 118, w: ebW, h: ebH,
-      text: "Cancel",
-      fill: BTN_RED_FILL, stroke: BTN_RED_STROKE, strokeWidth: 2, radius: 8,
-      textOptions: { font: mob ? "bold 22px sans-serif" : "bold 18px sans-serif", color: "#ffffff" },
-      onClick: () => this._cancelDisplayNameEdit(),
-    });
-    this.displayNameEdit.add(this.displayNameCancelBtn);
-
-    if (mob) {
-      this.displayNameKeyboard = new Keyboard({
-        x: 40, y: H - 320, w: W - 80,
-        onKey: (ch) => this._handleDisplayNameKey({ key: ch, length: 1 }),
-      });
-      this.displayNameKeyboard.visible = false;
-      screen.add(this.displayNameKeyboard);
-    } else {
-      this.displayNameKeyboard = null;
-    }
-
     return screen;
   }
 
@@ -1912,47 +1935,10 @@ export class Poker extends App {
     if (this.orientationBtn) {
       this.orientationBtn.setText("Orientation Mode: " + this.orientation);
     }
-    if (this.displayNameEditLabel) {
-      this._renderField(this.displayNameEditLabel, this.displayNameBuffer);
-    }
   }
 
-  _toggleDisplayNameEdit() {
-    if (this.optionsField === "displayName") return;
-    this.optionsField = "displayName";
-    this.displayNameBuffer = this.account ? this.account.displayName : "";
-    this.displayNameEdit.visible = true;
-    if (this.displayNameKeyboard) this.displayNameKeyboard.visible = true;
-    this._refreshOptionsScreen();
-  }
-
-  _cancelDisplayNameEdit() {
-    this.optionsField = null;
-    this.displayNameBuffer = "";
-    this.displayNameEdit.visible = false;
-    if (this.displayNameKeyboard) this.displayNameKeyboard.visible = false;
-    this.optionsErrorLabel.text = "";
-    this._refreshOptionsScreen();
-  }
-
-  _handleDisplayNameKey(e) {
-    if (this.optionsField !== "displayName") return;
-    const k = e.key;
-    if (k === "Backspace") {
-      this.displayNameBuffer = this.displayNameBuffer.slice(0, -1);
-      this._refreshOptionsScreen();
-      return;
-    }
-    if (k === "Enter") { this._saveDisplayName(); return; }
-    if (k.length === 1) {
-      this.displayNameBuffer += k;
-      this._refreshOptionsScreen();
-    }
-  }
-
-  async _saveDisplayName() {
-    const name = this.displayNameBuffer.trim();
-    if (!name) { this.optionsErrorLabel.text = "Display name cannot be empty."; return; }
+  async _saveDisplayName(name) {
+    if (!name) return;
     if (!this.account) return;
 
     this.optionsErrorLabel.text = "Saving...";
@@ -1982,7 +1968,9 @@ export class Poker extends App {
 
       if (updated) {
         this.account = updated;
-        this._cancelDisplayNameEdit();
+        this.optionsErrorLabel.text = "";
+        this._refreshOptionsScreen();
+        this._refreshMenuLabels();
       } else {
         this.optionsErrorLabel.text = "Save failed.";
       }
@@ -2034,18 +2022,6 @@ export class Poker extends App {
         text: "screen rotation first!",
         font: "18px sans-serif",
         color: TEXT_PRIMARY, align: "center", baseline: "middle",
-      }));
-      b.add(new Text({
-        x: bw / 2, y: 140,
-        text: "Switching orientation while the phone",
-        font: "14px sans-serif",
-        color: TEXT_DIM, align: "center", baseline: "middle",
-      }));
-      b.add(new Text({
-        x: bw / 2, y: 160,
-        text: "is free to rotate will cause layout glitches.",
-        font: "14px sans-serif",
-        color: TEXT_DIM, align: "center", baseline: "middle",
       }));
 
       const pW = 180, pH = 60;
@@ -2651,15 +2627,32 @@ export class Poker extends App {
     });
     screen.add(this.tableBankLabel);
 
-    const feltW = mob ? W - 40 : Math.min(W - 200, 900);
-    const feltH = mob ? H - 480 : Math.min(H - 260, 480);
-    const feltX = (W - feltW) / 2;
-    const feltY = mob ? 200 : 160;
+    // Top-down vertical budget.
+    //
+    // Header: 80px from top.
+    // Action-row strip: reserved at bottom of the layout area.
+    // Felt: whatever is left in the middle.
+    //
+    // This guarantees the action row and raise entry panel are
+    // always on-screen regardless of virtual height.
+    const headerH = 80;
+    const actionStripH = mob ? 300 : 260;
+    const feltW_max = mob ? W - 40 : Math.min(W - 200, 900);
+
+    const layoutTop    = headerH;
+    const layoutBottom = H;
+    const feltTop      = layoutTop + 10;
+    const feltBottom   = layoutBottom - actionStripH;
+    const feltH        = Math.max(180, feltBottom - feltTop);
+    const feltW        = feltW_max;
+    const feltX        = (W - feltW) / 2;
+    const feltY        = feltTop;
 
     this._feltW = feltW;
     this._feltH = feltH;
     this._feltX = feltX;
     this._feltY = feltY;
+    this._actionStripH = actionStripH;
 
     const felt = new Composite({ x: feltX, y: feltY, w: feltW, h: feltH });
     screen.add(felt);
@@ -2731,7 +2724,26 @@ export class Poker extends App {
     this.seatComposites = [];
     this.communityOverlays = [];
 
-    const actionY = feltY + feltH + 20;
+    // Winner banner (center of felt, above the community cards).
+    this.winnerLabel = new Text({
+      x: feltW / 2, y: feltH * 0.16,
+      text: "",
+      font: mob ? "bold 20px sans-serif" : "bold 18px sans-serif",
+      color: TEXT_PRIMARY, align: "center", baseline: "middle",
+    });
+    felt.add(this.winnerLabel);
+
+    // Next-hand countdown label (below winner banner).
+    this.nextHandLabel = new Text({
+      x: feltW / 2, y: feltH * 0.22,
+      text: "",
+      font: mob ? "bold 16px sans-serif" : "bold 14px sans-serif",
+      color: TEXT_SECONDARY, align: "center", baseline: "middle",
+    });
+    felt.add(this.nextHandLabel);
+
+    // Action row occupies the reserved strip.
+    const actionY = feltY + feltH + 16;
     this._actionY = actionY;
     this._buildActionRow(screen, actionY);
 
@@ -3037,14 +3049,6 @@ export class Poker extends App {
       color: TEXT_PRIMARY, align: "center", baseline: "middle",
     }));
 
-    this.reconnectInfoLabel = new Text({
-      x: bw / 2, y: 90,
-      text: "",
-      font: "16px monospace",
-      color: TEXT_SECONDARY, align: "center", baseline: "middle",
-    });
-    box.add(this.reconnectInfoLabel);
-
     box.add(new Button({
       x: bw / 2 - 170, y: bh - 100, w: 160, h: 60,
       text: "Yes",
@@ -3089,11 +3093,13 @@ export class Poker extends App {
     const rx = feltW / 2 - 40;
     const ry = feltH / 2 - 40;
 
+    const mySeat = (this.mySeat != null) ? this.mySeat : 0;
+
     const seatForVisual = (i) => {
-      if (i === 0) return this.mySeat;
-      if (i < 6)   return (this.mySeat + i) % 11;
+      if (i === 0) return mySeat;
+      if (i < 6)   return (mySeat + i) % 11;
       if (i === 6) return null;
-      return (this.mySeat + i - 1) % 11;
+      return (mySeat + i - 1) % 11;
     };
 
     for (let vi = 0; vi < totalVisualSlots; vi++) {
@@ -3121,6 +3127,14 @@ export class Poker extends App {
     this._renderChipsInto(this.potChips, pot, feltW / 2, feltH / 2 - 40);
 
     this._renderCommunityCards();
+
+    // Winner / next-hand labels.
+    if (this.winnerLabel) {
+      this.winnerLabel.text = this.table.handOver ? (this.table.winnerText || "") : "";
+    }
+    if (this.nextHandLabel) {
+      this.nextHandLabel.text = this._nextHandLabelText || "";
+    }
   }
 
   _buildSeatComposite(seat, cx, cy, visualSlot) {
@@ -3343,16 +3357,6 @@ export class Poker extends App {
     };
   }
 
-  _activeSeats() {
-    const out = [];
-    if (!this.table) return out;
-    for (let i = 0; i < SEATS; i++) {
-      const p = this.table.players[i];
-      if (p && !p.folded) out.push(i);
-    }
-    return out;
-  }
-
   _seatedSeats() {
     const out = [];
     if (!this.table) return out;
@@ -3379,8 +3383,13 @@ export class Poker extends App {
       this.table.stage = "waiting";
       this.table.handOver = false;
       this.table.winnerText = "";
+      this._renderTable();
+      this._renderActionRow();
       return;
     }
+
+    this._cancelBotTimer();
+    this._cancelNextHandTimer();
 
     this.table.handId += 1;
     this.table.community = [];
@@ -3391,6 +3400,7 @@ export class Poker extends App {
     this.table.turnCount += 1;
     this.table.seed = (Math.random() * 0xffffffff) >>> 0;
     this.table.dealtCount = 0;
+    this._nextHandLabelText = "";
 
     for (let i = 0; i < SEATS; i++) {
       const p = this.table.players[i];
@@ -3437,6 +3447,10 @@ export class Poker extends App {
 
     this.table.turn = this._nextActiveFrom(bbSeat);
     this.table.turnStartedIso = nowIso();
+
+    this._renderTable();
+    this._renderActionRow();
+    this._kickBotIfTurn();
   }
 
   _nextSeatedWithChips(fromSeat) {
@@ -3469,15 +3483,60 @@ export class Poker extends App {
     if (p.bank === 0) p.allIn = true;
   }
 
-  _commit(seat, amount) {
+  // Schedule a bot move if the current turn seat is a bot. Single
+  // source of truth for "kick the engine forward".
+  _kickBotIfTurn() {
+    this._cancelBotTimer();
+
+    if (!this.table) return;
+    if (this.table.handOver) return;
+    if (this.table.turn == null) return;
+
+    const p = this.table.players[this.table.turn];
+    if (!p || !p.isBot) return;
+
+    const delay = BOT_THINK_MIN_MS + Math.floor(Math.random() * (BOT_THINK_MAX_MS - BOT_THINK_MIN_MS));
+
+    const self = this;
+    this._botTimer = setTimeout(() => {
+      self._botTimer = null;
+      self._botAct();
+    }, delay);
+  }
+
+  _cancelBotTimer() {
+    if (this._botTimer) {
+      clearTimeout(this._botTimer);
+      this._botTimer = null;
+    }
+  }
+
+  _botAct() {
+    if (!this.table) return;
+    if (this.table.handOver) return;
+    const seat = this.table.turn;
+    if (seat == null) return;
     const p = this.table.players[seat];
-    if (!p) return 0;
-    const actual = Math.min(amount, p.bank);
-    p.bank -= actual;
-    p.committed += actual;
-    this.table.pot += actual;
-    if (p.bank === 0) p.allIn = true;
-    return actual;
+    if (!p || !p.isBot) return;
+
+    const dec = this._decideBotAction(seat);
+    const ok = this._applyActionToState(this.table, seat, dec.action, dec.amount);
+    if (!ok) {
+      // Bot could not legally take its preferred action. Fall back
+      // to the least-bad legal option.
+      if (dec.action === "check") {
+        const toCall = Math.max(0, this._highestBet - p.committed);
+        if (toCall > 0) {
+          this._applyActionToState(this.table, seat, "fold", 0);
+        }
+      } else {
+        this._applyActionToState(this.table, seat, "fold", 0);
+      }
+    }
+
+    this._advanceState(this.table);
+    this._renderTable();
+    this._renderActionRow();
   }
 
   _onActionButton(key) {
@@ -3612,7 +3671,6 @@ export class Poker extends App {
       this._lastRaiser = seat;
       p.lastAction = "raise " + formatMoney(p.committed);
       p.hasActed = true;
-      // A raise reopens action: everyone else must act again.
       for (let i = 0; i < SEATS; i++) {
         const q = state.players[i];
         if (!q || q.folded) continue;
@@ -3629,7 +3687,6 @@ export class Poker extends App {
     if (!p) return { action: "fold" };
 
     const toCall = this._amountToCall(seat);
-    const pot = this.table.pot;
     const personality = p.personality || "straight";
 
     let strength = 0;
@@ -3738,6 +3795,8 @@ export class Poker extends App {
     return h;
   }
 
+  // Advance the turn, end the round, or end the hand. Does NOT
+  // recursively step bots. That is _kickBotIfTurn's job.
   _advanceState(state) {
     const activeSeats = [];
     for (let i = 0; i < SEATS; i++) {
@@ -3772,11 +3831,7 @@ export class Poker extends App {
     state.turnStartedIso = nowIso();
     state.turnCount += 1;
 
-    if (state.players[next] && state.players[next].isBot && this.tableMode === "sp") {
-      const dec = this._decideBotAction(next);
-      const ok = this._applyActionToState(state, next, dec.action, dec.amount);
-      if (ok) this._advanceState(state);
-    }
+    this._kickBotIfTurn();
   }
 
   _endRound(state) {
@@ -3815,11 +3870,7 @@ export class Poker extends App {
     state.turnStartedIso = nowIso();
     state.turnCount += 1;
 
-    if (state.players[state.turn] && state.players[state.turn].isBot && this.tableMode === "sp") {
-      const dec = this._decideBotAction(state.turn);
-      const ok = this._applyActionToState(state, state.turn, dec.action, dec.amount);
-      if (ok) this._advanceState(state);
-    }
+    this._kickBotIfTurn();
   }
 
   _endHandSingleWinner(state, seat) {
@@ -3828,9 +3879,7 @@ export class Poker extends App {
     p.bank += state.pot;
     state.winnerText = (p.displayName || p.name || ("Seat " + seat)) + " wins " + formatMoney(state.pot);
     state.pot = 0;
-    state.handOver = true;
-    state.turn = null;
-    state.stage = "showdown";
+    this._finishHand(state);
   }
 
   _showdown(state) {
@@ -3840,7 +3889,7 @@ export class Poker extends App {
       if (p && !p.folded) activeSeats.push(i);
     }
     if (activeSeats.length === 0) {
-      state.handOver = true;
+      this._finishHand(state);
       return;
     }
 
@@ -3859,9 +3908,43 @@ export class Poker extends App {
     const names = winners.map(w => (state.players[w.seat].displayName || state.players[w.seat].name || ("Seat " + w.seat))).join(", ");
     state.winnerText = names + " win " + formatMoney(state.pot) + " (" + best.name + ")";
     state.pot = 0;
+    this._finishHand(state);
+  }
+
+  _finishHand(state) {
     state.handOver = true;
     state.turn = null;
     state.stage = "showdown";
+    this._cancelBotTimer();
+    this._scheduleNextHand();
+  }
+
+  // ---------- Next-hand scheduler ----------
+
+  _scheduleNextHand() {
+    this._cancelNextHandTimer();
+
+    if (!this.table) return;
+    if (this.tableMode === "sp" && !this._canStartHand()) return;
+    if (this.tableMode !== "sp") return;   // MP next-hand scheduling deferred.
+
+    const startAt = Date.now() + NEXT_HAND_DELAY_MS;
+    this._nextHandLabelText = "Next hand in " + Math.ceil(NEXT_HAND_DELAY_MS / 1000) + "...";
+
+    const self = this;
+    this._nextHandTimer = setTimeout(() => {
+      self._nextHandTimer = null;
+      self._nextHandLabelText = "";
+      self._startHand();
+    }, NEXT_HAND_DELAY_MS);
+  }
+
+  _cancelNextHandTimer() {
+    if (this._nextHandTimer) {
+      clearTimeout(this._nextHandTimer);
+      this._nextHandTimer = null;
+    }
+    this._nextHandLabelText = "";
   }
 
   _renderActionRow() {
@@ -3948,8 +4031,6 @@ export class Poker extends App {
     this._refreshBankLabels();
 
     this._startHand();
-    this._renderTable();
-    this._renderActionRow();
   }
 
   _makeBotRecord(seat, tier) {
@@ -3981,8 +4062,6 @@ export class Poker extends App {
     this._renderTable();
     if (this.table.handOver && this._canStartHand()) {
       this._startHand();
-      this._renderTable();
-      this._renderActionRow();
     }
   }
 
@@ -4316,6 +4395,9 @@ export class Poker extends App {
     if (this._leaving) return;
     this._leaving = true;
 
+    this._cancelBotTimer();
+    this._cancelNextHandTimer();
+
     try {
       if (this.tableMode === "mp") {
         await this._releaseMPSeat();
@@ -4604,15 +4686,6 @@ export class Poker extends App {
     this._nextCycleAt = 0;
   }
 
-  _kickCycle() {
-    if (!this.roomKey) return;
-    if (this._cycleTimer) {
-      clearTimeout(this._cycleTimer);
-      this._cycleTimer = null;
-    }
-    this._runCycleLoop();
-  }
-
   async _runCycleLoop() {
     if (this.tableMode !== "mp") return;
     this._nextCycleAt = 0;
@@ -4732,35 +4805,8 @@ export class Poker extends App {
           hint
         );
       });
-      await this._refreshTableMirror();
+      await self._refreshTableMirror();
     } catch (e) {}
-  }
-
-  // =================================================================
-  // Manual update.
-  // =================================================================
-
-  async _manualUpdate() {
-    if (this.tableMode !== "mp") return;
-    if (this._updating) return;
-    const now = Date.now();
-    if (now - this._lastUpdate < UPDATE_THROTTLE) return;
-    this._updating = true;
-    this._lastUpdate = now;
-    try {
-      await this._cycle();
-    } finally {
-      this._updating = false;
-    }
-  }
-
-  // =================================================================
-  // Bank labels.
-  // =================================================================
-
-  _refreshBankLabels() {
-    if (!this.account) return;
-    if (this.tableBankLabel) this.tableBankLabel.text = formatMoney(this.account.bank);
   }
 
   // =================================================================
@@ -4770,19 +4816,19 @@ export class Poker extends App {
   onEvent(e) {
     const top = this.stack[this.stack.length - 1];
 
-    if (e.type === "keydown") {
-      if (top === "login")   { this._handleLoginKey(e); return; }
-      if (top === "create")  { this._handleCreateKey(e); return; }
-      if (top === "options") {
-        if (this.optionsField === "displayName") this._handleDisplayNameKey(e);
+    if (e.type !== "keydown") return;
+
+    // Modal entry takes precedence over everything.
+    if (this.entryOpen) {
+      this._handleEntryKey(e);
+      return;
+    }
+
+    if (top === "table") {
+      if (this.chatOpen) { this._handleChatKey(e); return; }
+      if (this.raiseAmountPanel && this.raiseAmountPanel.visible) {
+        this._handleRaiseKey(e.key);
         return;
-      }
-      if (top === "table") {
-        if (this.chatOpen) { this._handleChatKey(e); return; }
-        if (this.raiseAmountPanel && this.raiseAmountPanel.visible) {
-          this._handleRaiseKey(e.key);
-          return;
-        }
       }
       return;
     }
@@ -4799,14 +4845,17 @@ export class Poker extends App {
     if (this._cursorTimer >= CURSOR_MS) {
       this._cursorTimer -= CURSOR_MS;
       this._cursorOn = !this._cursorOn;
-      if (top === "login")  this._refreshLoginScreen();
-      if (top === "create") this._refreshCreateScreen();
-      if (top === "options" && this.optionsField === "displayName") this._refreshOptionsScreen();
+      if (this.entryOpen) this._refreshEntry();
       if (top === "table" && this.chatOpen) this._refreshChatInput();
     }
 
     if (top === "table" && this.tableMode === "mp") {
       this._renderActionRow();
+    }
+
+    // Next-hand countdown label refresh.
+    if (top === "table" && this._nextHandLabelText && this.nextHandLabel) {
+      this.nextHandLabel.text = this._nextHandLabelText;
     }
   }
 }
